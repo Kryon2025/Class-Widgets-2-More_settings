@@ -59,6 +59,11 @@ PluginPage {
         page.syncingControls = false
     }
 
+    function saveExcluded() {
+        if (backend) backend.setExcludedLessonConfig(
+            excludedEnabledSwitch.checked, excludedLessonsField.text)
+    }
+
     Connections {
         target: backend
         function onConfigChanged() { page.reload() }
@@ -252,6 +257,58 @@ PluginPage {
                     Text { typography: Typography.Caption; text: "0 px" }
                     Item { Layout.fillWidth: true }
                     Text { typography: Typography.Caption; text: Math.round(hideSlider.value) + " px" }
+                }
+            }
+        }
+
+        Text { typography: Typography.BodyStrong; text: qsTr("特定课程不隐藏") }
+
+        SettingCard {
+            Layout.fillWidth: true
+            title: qsTr("排除课程")
+            description: qsTr("开启后，当前课程在下方列表中时，官方“在课堂中隐藏”不触发（参考一代 excluded_lessons）。")
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Switch {
+                    id: excludedEnabledSwitch
+                    text: qsTr("启用")
+                    checked: backend ? backend.getExcludedLessonConfig().enabled : false
+                    onToggled: saveExcluded()
+                }
+                TextField {
+                    id: excludedLessonsField
+                    Layout.fillWidth: true
+                    placeholderText: qsTr("课程名，逗号分隔，如：自习,体育")
+                    text: backend ? backend.getExcludedLessonConfig().lessons : ""
+                    onEditingFinished: saveExcluded()
+                }
+            }
+        }
+
+        Text { typography: Typography.BodyStrong; text: qsTr("补丁注入") }
+
+        SettingCard {
+            Layout.fillWidth: true
+            title: qsTr("补丁注入状态")
+            description: qsTr("安装插件时会自动向主程序注入所需补丁（组件动画开关、时间组件增强、堆叠组件、小组件高度）。注入后需重启主程序生效；状态异常时可手动重新注入。")
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Text {
+                    id: patchStatusText
+                    text: backend ? backend.getPatchStatus() : qsTr("未知")
+                }
+                Button {
+                    text: qsTr("重新注入补丁")
+                    onClicked: {
+                        if (backend) {
+                            backend.reinstallPatches()
+                            patchStatusText.text = backend.getPatchStatus()
+                        }
+                    }
                 }
             }
         }

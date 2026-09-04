@@ -11,13 +11,14 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from ClassWidgets.SDK import CW2Plugin, PluginAPI
 from loguru import logger
-from PySide6.QtCore import Signal, Slot
+from PySide6.QtCore import QTimer, Signal, Slot
 
-from integrations import install_all as _install_all, restore_all as _restore_all
+from integrations import install_all as _install_all, restore_all as _restore_all, find_app_root as _find_app_root
 from more_settings_config import MoreSettingsConfig
 from overlay_backend import OverlayBackend
 
@@ -85,8 +86,19 @@ class Plugin(CW2Plugin):
         except Exception as e:
             logger.warning("[more_settings] 注册设置页失败: {}", e)
 
+        # 官方"在课堂中隐藏"的特定课程不隐藏（参考一代 excluded_lessons）
+        try:
+            self.api.runtime.statusChanged.connect(self._on_status_changed)
+            logger.info("[more_settings] 已连接日程状态信号")
+        except Exception as e:
+            logger.warning("[more_settings] 连接日程状态信号失败: {}", e)
+
     def on_unload(self):
         super().on_unload()
+        try:
+            self.api.runtime.statusChanged.disconnect(self._on_status_changed)
+        except Exception:
+            pass
         try:
             _restore_all(logger)
         except Exception as e:
@@ -148,6 +160,87 @@ class Plugin(CW2Plugin):
         self._config.hide_depth = float(value)
         self._save_config()
         self.configChanged.emit()
+
+    # ── 特定课程不隐藏（官方"在课堂中隐藏"的排除）──────────────
+
+    @Slot(result=dict)
+    def getExcludedLessonConfig(self) -> dict:
+        return {
+            "enabled": self._config.hide_excluded_enabled,
+            "lessons": self._config.hide_excluded_lessons,
+        }
+
+    @Slot(bool, str)
+    def setExcludedLessonConfig(self, enabled: bool, lessons: str) -> None:
+        self._config.hide_excluded_enabled = bool(enabled)
+        self._config.hide_excluded_lessons = str(lessons or "")
+        self._save_config()
+        self.configChanged.emit()
+
+    # ── 主程序补丁注入（自动 + 手动重试）──────────────────────
+
+    @Slot(result=bool)
+    def reinstallPatches(self) -> bool:
+        """手动重新注入全部主程序补丁（幂等）。"""
+        try:
+            return _install_all(logger)
+        except Exception as e:
+            logger.warning("[more_settings] 重新注入补丁失败: {}", e)
+            return False
+
+    @Slot(result=str)
+    def getPatchStatus(self) -> str:
+        """返回补丁注入状态（供设置页显示）。"""
+        root = _find_app_root()
+        if root is None:
+            return "未找到主程序目录"
+        root = Path(root)
+        checks = [
+            (root / "src" / "qml" / "ClassWidgets" / "Components" / "WidgetsContainer.qml",
+             "overlayEditMode"),
+            (root / "src" / "qml" / "ClassWidgets" / "Components" / "WidgetLoader.qml",
+             "overlayListMode"),
+            (root / "src" / "qml" / "widgets" / "eventCountdown.qml",
+             "[patched by com.kryon.more_settings"),
+            (root / "src" / "qml" / "widgets" / "Time.qml",
+             "[patched by com.kryon.more_settings"),
+            (root / "src" / "qml" / "ClassWidgets" / "Components" / "dialogs" / "AddOverlayMemberDialog.qml",
+             None),
+        ]
+        missing = []
+        for p, mark in checks:
+            if not p.is_file():
+                missing.append(p.name)
+            elif mark is not None and mark not in p.read_text(encoding="utf-8", errors="ignore"):
+                missing.append(p.name)
+        return "已注入" if not missing else ("未注入: " + ", ".join(missing))
+
+    def _on_status_changed(self, status: str) -> None:
+        """官方 AutoHideTask 会随日程状态隐藏/显示小组件；
+        延迟到事件循环下一轮执行，确保在官方处理完之后再纠正。"""
+        QTimer.singleShot(0, lambda: self._apply_excluded_lesson(status))
+
+    def _apply_excluded_lesson(self, status: str) -> None:
+        try:
+            if not self._config.hide_excluded_enabled:
+                return
+            if status not in ("class", "activity"):
+                return
+            current = (self.api.runtime.current_title or "").strip()
+            if not current:
+                return
+            lessons = re.split(r"[,，、\s]+", self._config.hide_excluded_lessons or "")
+            if current not in {s for s in lessons if s}:
+                return
+            configs = self.api.globalconfig.configs
+            action = str(configs.interactions.hide.action)
+            if action == "mini_mode":
+                configs.preferences.mini_mode = False
+            else:
+                configs.interactions.hide.state = False
+            logger.info("[more_settings] 特定课程不隐藏已生效: {}", current)
+        except Exception as e:
+            logger.warning("[more_settings] 特定课程不隐藏处理失败: {}", e)
 
     def _save_config(self) -> None:
         try:

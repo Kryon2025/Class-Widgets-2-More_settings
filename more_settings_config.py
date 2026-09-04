@@ -39,3 +39,7 @@ class MoreSettingsConfig(ConfigBaseModel):
     # 小组件高度/深度
     display_height: float = -1             # 展示高度（px；-1 = 跟随默认偏移）
     hide_depth: float = 24                 # 隐藏深度（px）
+
+    # 特定课程不隐藏（官方"在课堂中隐藏"的排除，参考一代 excluded_lesson/excluded_lessons）
+    hide_excluded_enabled: bool = False    # 开关
+    hide_excluded_lessons: str = ""        # 课程名列表（逗号分隔，如：自习,体育）

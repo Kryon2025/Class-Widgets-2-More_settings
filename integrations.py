@@ -44,19 +44,38 @@ OLD_TIMER_ID = "kryonWidgetsHighSyncTimer"
 
 
 def find_app_root():
-    """定位主程序根目录（含 src/qml/.../WidgetsContainer.qml 的路径）。"""
+    """定位主程序根目录（含 src/qml/.../WidgetsContainer.qml 的路径）。
+
+    覆盖多种安装形态：
+    1. 便携版/解包版：插件位于 <主程序根>/plugins/<id>/，向上遍历命中；
+    2. sys.path 中的主程序运行目录；
+    3. onedir 发行版：主程序可执行文件所在目录。
+    """
     import sys
-    for p in sys.path:
-        cand = Path(p)
+
+    candidates = []
+    try:
+        candidates.append(Path(sys.executable).resolve().parent)
+    except Exception:
+        pass
+    candidates.extend(Path(p) for p in sys.path if isinstance(p, str))
+    here = Path(__file__).resolve()
+    candidates.extend(here.parents)
+
+    seen = set()
+    for cand in candidates:
+        try:
+            key = cand.resolve()
+        except OSError:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
         try:
             if (cand / _CONTAINER_REL).is_file():
                 return cand
         except OSError:
             continue
-    here = Path(__file__).resolve()
-    for anc in here.parents:
-        if (anc / _CONTAINER_REL).is_file():
-            return anc
     return None
 
 
