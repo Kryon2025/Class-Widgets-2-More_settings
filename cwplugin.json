@@ -1,11 +1,11 @@
 {
   "id": "com.kryon.more_settings",
   "name": "Kryon 的更多设置",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "api_version": ">=0.6.0",
   "entry": "main.py",
   "author": "松峰",
-  "description": "融合事件倒计时动画开关、小组件高度/深度、堆叠组件，并增强官方时间组件（动画开关与丰富显示选项）。",
+  "description": "新增“特定课程不隐藏”“自定义堆叠组件高度及宽度功能”",
   "url": "https://github.com/Kryon2025/Class-Widgets-2-More_settings",
   "readme": "README.md",
   "icon": "icon.png"

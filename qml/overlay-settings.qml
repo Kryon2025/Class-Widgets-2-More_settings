@@ -13,6 +13,7 @@ SettingsLayout {
     onSecValueChanged: settings.interval_ms = secValue * 1000
     Component.onCompleted: {
         secValue = (settings.interval_ms || 5000) / 1000
+        reloadFrame()
     }
 
     // 插件后端：优先用主程序补丁注入的 backendObj（WidgetsContainer 打开设置时注入），
@@ -40,6 +41,38 @@ SettingsLayout {
             }
         }
         return typeId
+    }
+
+    // 组件框尺寸（按实例保存于后端）
+    property int frameW: 0
+    property int frameH: 0
+
+    function reloadFrame() {
+        if (!overlayBackend) return
+        var f = overlayBackend.getFrameSize(instanceId)
+        frameW = f ? (f.w || 0) : 0
+        frameH = f ? (f.h || 0) : 0
+    }
+    function stepFrame(dw, dh) {
+        if (!overlayBackend) return
+        var w = frameW
+        if (dw !== 0) {
+            w = w > 0 ? w + dw : 400 + (dw > 0 ? dw : 0)
+            if (w < 60) w = 60
+        }
+        var h = frameH
+        if (dh !== 0) {
+            h = h > 0 ? h + dh : 200 + (dh > 0 ? dh : 0)
+            if (h < 40) h = 40
+        }
+        overlayBackend.setFrameSize(instanceId, w, h)
+        reloadFrame()
+    }
+    function resetFrame() {
+        if (!overlayBackend) return
+        overlayBackend.setFrameSize(instanceId, 0, 0)
+        frameW = 0
+        frameH = 0
     }
 
     SettingCard {
@@ -70,6 +103,30 @@ SettingsLayout {
 
     SettingCard {
         Layout.fillWidth: true
+        title: "组件框尺寸"
+        description: "自定义本堆叠组件的框宽高（自适应 = 跟随内容）。"
+
+        ColumnLayout {
+            spacing: 8
+            Text {
+                text: (frameW > 0 && frameH > 0) ? frameW + " × " + frameH
+                      : (frameW > 0) ? frameW + " × 自动"
+                      : (frameH > 0) ? "自动 × " + frameH : "自适应"
+                font.bold: true
+            }
+            RowLayout {
+                spacing: 6
+                Button { text: "宽−"; onClicked: stepFrame(-10, 0) }
+                Button { text: "宽+"; onClicked: stepFrame(10, 0) }
+                Button { text: "高−"; onClicked: stepFrame(0, -10) }
+                Button { text: "高+"; onClicked: stepFrame(0, 10) }
+                Button { text: "自适应"; onClicked: resetFrame() }
+            }
+        }
+    }
+
+    SettingCard {
+        Layout.fillWidth: true
         title: "显示切换条"
         description: "在组件右侧显示“切换”按钮，点击可手动切换到下一个成员组件。"
 
@@ -87,7 +144,7 @@ SettingsLayout {
         ColumnLayout {
             spacing: 4
             Repeater {
-                model: overlayBackend ? overlayBackend.getMembers() : []
+                model: overlayBackend ? overlayBackend.getMembers(instanceId) : []
                 delegate: RowLayout {
                     Layout.fillWidth: true
                     spacing: 8
@@ -101,7 +158,7 @@ SettingsLayout {
                         implicitWidth: 52
                         implicitHeight: 26
                         onClicked: {
-                            if (overlayBackend) overlayBackend.removeMember(modelData.key)
+                            if (overlayBackend) overlayBackend.removeMember(instanceId, modelData.key)
                         }
                     }
                 }

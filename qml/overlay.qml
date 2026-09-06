@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls
+import QtQuick.Window
 import RinUI
 import ClassWidgets.Theme 1.0
 
@@ -19,11 +20,21 @@ Item {
     property bool editMode: false
     // 主程序"编辑重叠组件"模式：true 时成员纵列列出（由 WidgetLoader 转发）
     property bool overlayListMode: false
+    // 实例 id（WidgetLoader 注入）：桌面上多个堆叠组件实例各自独立
+    // 管理成员列表、成员设置与自定义框尺寸，互不干扰
+    property string instanceId: ""
 
     // WidgetLoader 在组件创建完成后才注入 backend（Loader.Ready），
-    // 因此不能用 onCompleted 刷新，改为 backend 注入时触发
+    // 因此不能用 onCompleted 刷新，改为 backend 注入时触发。
+    // 注意：WidgetLoader 先注入 backend、后注入 instanceId，若立刻读取
+    // 会拿空实例 ID 误读 default 组 → 延迟一帧到 instanceId 就绪后再刷。
     onBackendChanged: {
-        if (backend) refresh()
+        if (backend) Qt.callLater(function() { root.refresh() })
+    }
+
+    // 实例 ID 注入/变化（桌面组件重载、模型刷新）后按实例重新读取
+    onInstanceIdChanged: {
+        if (backend) Qt.callLater(function() { root.refresh() })
     }
 
     // ── 上课期间隐藏切换条 ──────────────────────────────
@@ -132,6 +143,12 @@ Item {
     property int maxW: 0
     property int maxH: 0
     property int listSpacing: 10
+    readonly property int autoW: Math.max(96, root.maxW + root.switchBarSpace)
+    readonly property int autoH: Math.max(80, root.maxH)
+
+    // 自定义组件框宽高（0 = 跟随内容自适应；按实例持久化于后端）
+    property int frameW: 0
+    property int frameH: 0
 
     // 右侧切换条占位宽度（仅显示切换条时预留，保证不超出组件边界被裁剪）
     property int switchBarSpace: root.showSwitchBar && root.members.length > 0 ? 48 : 0
@@ -139,10 +156,11 @@ Item {
     // 迷你模式（主程序全局配置）：容器与切换条高度跟随，与其它组件保持一致
     readonly property bool miniMode: Configs.data.preferences.mini_mode
 
-    implicitWidth: Math.max(96, root.maxW + root.switchBarSpace)
+    // 轮播模式框尺寸：frameW/H > 0 时用自定义值，否则自动；迷你模式保持全局一致
+    implicitWidth: root.frameW > 0 ? root.frameW : root.autoW
     implicitHeight: root.overlayListMode
         ? Math.max(80, root.listTotalH())
-        : (root.miniMode ? 56 : Math.max(80, root.maxH))
+        : (root.miniMode ? 56 : (root.frameH > 0 ? root.frameH : root.autoH))
 
     // 轮播间隔由组件设置 interval_ms 控制（列表模式 / 编辑模式暂停）
     property int carouselInterval: settings && settings.interval_ms ? settings.interval_ms : 5000
@@ -165,6 +183,7 @@ Item {
     Connections {
         target: backend
         function onMembersChanged() { root.refresh() }
+        function onFrameChanged() { root.reloadFrame() }
     }
 
     function findDef(widgetId) {
@@ -175,9 +194,44 @@ Item {
     }
 
     function refresh() {
-        var list = backend.getMembers()
+        if (!backend) return
+        var list = backend.getMembers(root.instanceId)
         root.members = list
         if (root.activeIndex >= list.length) root.activeIndex = 0
+        root.reloadFrame()
+    }
+
+    // 读取该实例的自定义框尺寸（0 = 自适应）
+    function reloadFrame() {
+        if (!backend) return
+        var f = backend.getFrameSize(root.instanceId)
+        root.frameW = f ? (f.w || 0) : 0
+        root.frameH = f ? (f.h || 0) : 0
+    }
+
+    // 步进调整框宽/高（px）；自适应(0)时首次步进以当前实际尺寸起步
+    function stepFrame(dw, dh) {
+        if (!backend) return
+        var w = root.frameW
+        if (dw !== 0) {
+            w = w > 0 ? w + dw : root.autoW + (dw > 0 ? dw : 0)
+            if (w < 60) w = 60
+        }
+        var h = root.frameH
+        if (dh !== 0) {
+            h = h > 0 ? h + dh : root.autoH + (dh > 0 ? dh : 0)
+            if (h < 40) h = 40
+        }
+        backend.setFrameSize(root.instanceId, w, h)
+        root.reloadFrame()
+    }
+
+    // 恢复为跟随内容自适应
+    function resetFrame() {
+        if (!backend) return
+        backend.setFrameSize(root.instanceId, 0, 0)
+        root.frameW = 0
+        root.frameH = 0
     }
 
     // 列表模式下第 i 个成员的 y：固定行高（maxH + 间距），不依赖高度缓存，
@@ -198,7 +252,7 @@ Item {
         var d = root.findDef(typeId)
         var defaults0 = d ? (d.default_settings || {}) : {}
         var saved0 = (root.backend && root.backend.getMemberSettings)
-            ? (root.backend.getMemberSettings(key) || {})
+            ? (root.backend.getMemberSettings(root.instanceId, key) || {})
             : {}
         var merged = {}
         for (var k in defaults0) merged[k] = defaults0[k]
@@ -212,6 +266,22 @@ Item {
             root.activeIndex = (root.activeIndex + 1) % root.members.length
             if (carouselTimer.running) carouselTimer.restart()
         }
+    }
+
+    // 成员显示名
+    function nameOf(typeId) {
+        var d = root.findDef(typeId)
+        return d ? (d.name || typeId) : typeId
+    }
+
+    function removeMemberByKey(k) {
+        if (root.backend) root.backend.removeMember(root.instanceId, k)
+    }
+
+    // 打开本堆叠组件实例自己的居中编辑窗口
+    function openOverlayEditor() {
+        root.refresh()
+        overlayEditDialog.open()
     }
 
     // 右键成员 → 单独编辑该组件设置
@@ -313,7 +383,7 @@ Item {
                 anchors.top: parent.top
                 anchors.left: parent.left
                 onClicked: {
-                    if (root.backend) root.backend.removeMember(memberId)
+                    if (root.backend) root.backend.removeMember(root.instanceId, memberId)
                 }
             }
 
@@ -504,6 +574,7 @@ Item {
                             if (settingsLoader.item && settingsLoader.item.settings
                                     && root.backend) {
                                 root.backend.saveMemberSettings(
+                                    root.instanceId,
                                     memberSettingsDialog.currentMemberId,
                                     settingsLoader.item.settings)
                                 root.applyMemberSettings(
@@ -513,6 +584,170 @@ Item {
                             memberSettingsDialog.close()
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // ── 堆叠组件自己的居中编辑窗口（成员管理 + 框宽高 + 添加成员）─────────
+    Dialog {
+        id: overlayEditDialog
+        title: qsTr("编辑堆叠组件")
+        modal: true
+        standardButtons: Dialog.Close
+        width: 620
+        height: 520
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 16
+            spacing: 10
+
+            Text {
+                Layout.fillWidth: true
+                visible: root.members.length === 0
+                text: qsTr("暂无成员，点击下方“添加成员”加入组件")
+                color: Theme.isDark() ? Qt.rgba(1, 1, 1, 0.55) : Qt.rgba(0, 0, 0, 0.55)
+                font.pixelSize: 13
+            }
+
+            Flickable {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                contentHeight: memberListColumn.height
+
+                Column {
+                    id: memberListColumn
+                    width: parent.width
+                    spacing: 8
+
+                    Repeater {
+                        model: root.members
+                        delegate: RowLayout {
+                            width: memberListColumn.width
+                            spacing: 8
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: root.nameOf(modelData.typeId)
+                                elide: Text.ElideRight
+                                font.pixelSize: 13
+                                color: Theme.isDark() ? "#eee" : "#222"
+                            }
+                            Button {
+                                text: qsTr("设置")
+                                onClicked: root.openMemberSettings(index)
+                            }
+                            Button {
+                                text: qsTr("移除")
+                                onClicked: root.removeMemberByKey(modelData.key)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 自定义组件框宽高（0 = 自适应；按实例保存）
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                spacing: 6
+
+                Text {
+                    Layout.alignment: Qt.AlignVCenter
+                    text: {
+                        var w = root.frameW
+                        var h = root.frameH
+                        if (w > 0 && h > 0) return w + "×" + h
+                        if (w > 0) return w + "×自动"
+                        if (h > 0) return "自动×" + h
+                        return qsTr("自适应")
+                    }
+                    font.pixelSize: 13
+                    color: Theme.isDark() ? Qt.rgba(1, 1, 1, 0.6) : Qt.rgba(0, 0, 0, 0.6)
+                }
+                Button { text: qsTr("宽−"); onClicked: root.stepFrame(-10, 0) }
+                Button { text: qsTr("宽+"); onClicked: root.stepFrame(10, 0) }
+                Button { text: qsTr("高−"); onClicked: root.stepFrame(0, -10) }
+                Button { text: qsTr("高+"); onClicked: root.stepFrame(0, 10) }
+                Button { text: qsTr("自适应"); onClicked: root.resetFrame() }
+            }
+
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                spacing: 8
+
+                Button {
+                    text: qsTr("添加成员")
+                    highlighted: true
+                    onClicked: addMemberDialog.open()
+                }
+                Button {
+                    text: qsTr("完成")
+                    onClicked: overlayEditDialog.close()
+                }
+            }
+        }
+    }
+
+    // 成员选择子对话框（候选组件列表）
+    Dialog {
+        id: addMemberDialog
+        title: qsTr("添加成员组件")
+        modal: true
+        standardButtons: Dialog.Close
+        width: 560
+        height: 480
+
+        property var candidates: {
+            var list = []
+            if (typeof WidgetsModel !== "undefined" && WidgetsModel.definitionsList) {
+                var raw = WidgetsModel.definitionsList
+                for (var i = 0; i < raw.length; i++) {
+                    if (raw[i].id === "com.overlay") continue
+                    list.push(raw[i])
+                }
+            }
+            return list
+        }
+        property var selected: widgetsListView.currentIndex >= 0
+            ? widgetsListView.model[widgetsListView.currentIndex] : null
+
+        onOpened: {
+            widgetsListView.currentIndex = -1
+            widgetsListView.currentIndex = 0
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 16
+            spacing: 10
+
+            ListView {
+                id: widgetsListView
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                model: addMemberDialog.candidates
+                clip: true
+
+                delegate: ItemDelegate {
+                    width: widgetsListView.width
+                    text: modelData.name || modelData.id
+                    highlighted: index === widgetsListView.currentIndex
+                    onClicked: widgetsListView.currentIndex = index
+                }
+            }
+
+            Button {
+                Layout.alignment: Qt.AlignRight
+                text: qsTr("添加")
+                highlighted: true
+                enabled: addMemberDialog.selected !== null
+                onClicked: {
+                    if (root.backend && addMemberDialog.selected) {
+                        root.backend.addMember(root.instanceId, addMemberDialog.selected.id)
+                    }
+                    addMemberDialog.close()
                 }
             }
         }

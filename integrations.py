@@ -22,12 +22,14 @@ from pathlib import Path
 _CONTAINER_REL = Path("src") / "qml" / "ClassWidgets" / "Components" / "WidgetsContainer.qml"
 _WLOADER_REL = Path("src") / "qml" / "ClassWidgets" / "Components" / "WidgetLoader.qml"
 _DIALOG_REL = Path("src") / "qml" / "ClassWidgets" / "Components" / "dialogs" / "AddOverlayMemberDialog.qml"
+_EDITDLG_REL = Path("src") / "qml" / "ClassWidgets" / "Components" / "dialogs" / "EditOverlayDialog.qml"
 _COUNTDOWN_REL = Path("src") / "qml" / "widgets" / "eventCountdown.qml"
 _TIME_REL = Path("src") / "qml" / "widgets" / "Time.qml"
 
 _BACKUP_ROOT = ".cwplugin_backups"
 _BACKUP_SUB = "more_settings"
 _DIALOG_SRC = Path(__file__).resolve().parent / "host_patch" / "AddOverlayMemberDialog.qml"
+_EDITDLG_SRC = Path(__file__).resolve().parent / "host_patch" / "EditOverlayDialog.qml"
 _COUNTDOWN_PATCH = Path(__file__).resolve().parent / "qml" / "eventCountdown.patch.qml"
 _TIME_PATCH = Path(__file__).resolve().parent / "qml" / "time.patch.qml"
 _NO_DIALOG_MARK = "NO_DIALOG_ORIG"
@@ -167,13 +169,67 @@ _SIGNAL_ANCHOR = "    signal contentGeometryChanged()\n"
 
 # ── 堆叠插件补丁定义（原 com.overlay）─────────────────────────
 
+# v3：把正在编辑的堆叠组件实例传给成员选择对话框（按实例隔离）
+_ADD_MEMBER_OLD = """                    text: qsTr("Add Member")
+                    onClicked: addOverlayMemberDialog.open()"""
+_ADD_MEMBER_NEW = """                    text: qsTr("Add Member")
+                    onClicked: {
+                        // 正在编辑的堆叠组件实例 → 成员加到该实例下
+                        addOverlayMemberDialog.overlayInstanceId = model.instanceId
+                        addOverlayMemberDialog.open()
+                    }"""
+
+# v3：编辑行 Done 按钮之后追加"自定义组件框宽/高 + 自适应"按钮组
+_EDITROW_TAIL_ANCHOR = """                    text: qsTr("Done")
+                    onClicked: {
+                        widgetsContainer.overlayEditMode = false
+                    }
+                }"""
+_EDITROW_TAIL_NEW = _EDITROW_TAIL_ANCHOR + """
+
+                // 堆叠插件集成：自定义组件框宽高（0 = 自适应；按实例保存）
+                Text {
+                    Layout.alignment: Qt.AlignVCenter
+                    font.pixelSize: 13
+                    color: Theme.isDark() ? Qt.rgba(1, 1, 1, 0.65) : Qt.rgba(0, 0, 0, 0.6)
+                    text: {
+                        var ow = loader.item
+                        var w = ow ? ow.frameW : 0
+                        var h = ow ? ow.frameH : 0
+                        if (w > 0 && h > 0) return w + "×" + h
+                        if (w > 0) return w + "×自动"
+                        if (h > 0) return "自动×" + h
+                        return qsTr("自适应")
+                    }
+                }
+                Button {
+                    text: qsTr("宽−")
+                    onClicked: if (loader.item) loader.item.stepFrame(-10, 0)
+                }
+                Button {
+                    text: qsTr("宽+")
+                    onClicked: if (loader.item) loader.item.stepFrame(10, 0)
+                }
+                Button {
+                    text: qsTr("高−")
+                    onClicked: if (loader.item) loader.item.stepFrame(0, -10)
+                }
+                Button {
+                    text: qsTr("高+")
+                    onClicked: if (loader.item) loader.item.stepFrame(0, 10)
+                }
+                Button {
+                    text: qsTr("自适应")
+                    onClicked: if (loader.item) loader.item.resetFrame()
+                }"""
+
 _CONTAINER_OPS = [
     ("import ClassWidgets.Easing",
      "import ClassWidgets.Easing\nimport \"dialogs\""),
     ("    property bool editMode: false",
      """    property bool editMode: false
-    // 堆叠插件集成：编辑其内部成员（成员纵向排列 + 下方编辑行）
-    property bool overlayEditMode: false"""),
+    // 堆叠插件集成：正在编辑的堆叠组件实例 id（按实例隔离，就地展开）
+    property string overlayEditingId: ''"""),
     (["""                MenuItem {
                     icon.name: "ic_fluent_delete_20_regular"
                     text: qsTr("Delete")""",
@@ -188,7 +244,7 @@ _CONTAINER_OPS = [
                     onTriggered: {
                         widgetMenu.close()
                         widgetsContainer.editMode = true
-                        widgetsContainer.overlayEditMode = true
+                        widgetsContainer.overlayEditingId = model.instanceId
                     }
                 }
                 MenuItem {
@@ -202,7 +258,7 @@ _CONTAINER_OPS = [
                 height: loader.height * visualScale"""],
      """            // 堆叠插件集成：编辑时独占一行（大组件），下方展开编辑行
             property bool isOverlay: model.typeId === "com.overlay"
-            property bool overlayEditing: widgetsContainer.overlayEditMode && isOverlay
+            property bool overlayEditing: widgetsContainer.overlayEditingId === model.instanceId && isOverlay
             property real visualScale: scaleFactor
             width: overlayEditing
                 ? Math.max((widgetsContainer.parent ? widgetsContainer.parent.width - 16 : 0),
@@ -239,7 +295,7 @@ _CONTAINER_OPS = [
                     icon.name: "ic_fluent_checkmark_20_regular"
                     text: qsTr("Done")
                     onClicked: {
-                        widgetsContainer.overlayEditMode = false
+                        widgetsContainer.overlayEditingId = ''
                     }
                 }
             }
@@ -247,9 +303,9 @@ _CONTAINER_OPS = [
             ToolButton {
                 id: deleteBtn"""),
     ("            rotation: editMode",
-     "            rotation: editMode && !widgetsContainer.overlayEditMode"),
+     "            rotation: editMode && !widgetContainer.overlayEditing"),
     ("                running: editMode",
-     "                running: editMode && !widgetsContainer.overlayEditMode"),
+     "                running: editMode && !widgetContainer.overlayEditing"),
     (["""            // 鼠标右键打开设置
             TapHandler {
                 acceptedButtons: Qt.RightButton""",
@@ -259,9 +315,9 @@ _CONTAINER_OPS = [
      """            // 鼠标右键打开设置（编辑堆叠时禁用，成员右键由 overlay 内部处理）
             TapHandler {
                 acceptedButtons: Qt.RightButton
-                enabled: !widgetsContainer.overlayEditMode"""),
+                enabled: !widgetContainer.overlayEditing"""),
     ("onClicked: widgetsContainer.editMode = false",
-     "onClicked: { widgetsContainer.editMode = false; widgetsContainer.overlayEditMode = false }"),
+     "onClicked: { widgetsContainer.editMode = false; widgetsContainer.overlayEditingId = '' }"),
     ("""    // 小组件设置窗口
     WidgetSettingsDialog {
         id: settingsDialog
@@ -277,11 +333,11 @@ _CONTAINER_OPS = [
     }"""),
     ("""            visible: widgetsContainer.editMode
             id: acceptButton""",
-     """            visible: widgetsContainer.editMode && !widgetsContainer.overlayEditMode
+     """            visible: widgetsContainer.editMode && widgetsContainer.overlayEditingId === ''
             id: acceptButton"""),
     ("""        visible: widgetsContainer.editMode || widgetRepeater.count === 0""",
      """        visible: (widgetsContainer.editMode || widgetRepeater.count === 0)
-            && !widgetsContainer.overlayEditMode"""),
+            && widgetsContainer.overlayEditingId === ''"""),
     (["""                                settingsDialog.setSource(model.settingsQml, {
                                     "settings": model.settings,
                                     "instanceId": model.instanceId
@@ -295,6 +351,7 @@ _CONTAINER_OPS = [
                                     "instanceId": model.instanceId,
                                     "backendObj": model.backendObj
                                 })"""),
+    (_ADD_MEMBER_OLD, _ADD_MEMBER_NEW),
 ]
 
 _WLOADER_OPS = [
@@ -306,7 +363,7 @@ _WLOADER_OPS = [
                 item.editMode = widgetsContainer.editMode
             }
             if (item && item.hasOwnProperty('overlayListMode')) {
-                item.overlayListMode = widgetsContainer.overlayEditMode
+                item.overlayListMode = widgetsContainer.overlayEditingId === model.instanceId
             }
             anim.start()"""),
     ("""        function onEditModeChanged() {
@@ -320,9 +377,9 @@ _WLOADER_OPS = [
                 loader.item.editMode = widgetsContainer.editMode
             }
         }
-        function onOverlayEditModeChanged() {
+        function onOverlayEditingIdChanged() {
             if (loader.item && loader.item.hasOwnProperty('overlayListMode')) {
-                loader.item.overlayListMode = widgetsContainer.overlayEditMode
+                loader.item.overlayListMode = widgetsContainer.overlayEditingId === model.instanceId
             }
         }
     }"""),
@@ -458,6 +515,7 @@ def restore_all(logger, root=None):
             (backup_dir / "AddOverlayMemberDialog.qml.orig").read_bytes())
     elif (backup_dir / _NO_DIALOG_MARK).is_file():
         (root / _DIALOG_REL).unlink(missing_ok=True)
+    (root / _EDITDLG_REL).unlink(missing_ok=True)
 
     shutil.rmtree(backup_dir, ignore_errors=True)
     logger.info("[more_settings] 主程序已还原")

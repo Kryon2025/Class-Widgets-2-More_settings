@@ -17,6 +17,8 @@ Dialog {
 
     // 重叠插件后端（从组件定义列表取）
     property var overlayBackend: null
+    // 正在编辑的堆叠组件实例 id（由 WidgetsContainer 编辑行打开前注入）
+    property string overlayInstanceId: ""
     property var defs: {
         if (typeof WidgetsModel !== "undefined" && WidgetsModel.definitionsList) {
             var list = []
@@ -153,6 +155,7 @@ Dialog {
                     if (overlayMemberDialog.overlayBackend
                             && overlayMemberDialog.selectedWidget) {
                         overlayMemberDialog.overlayBackend.addMember(
+                            overlayMemberDialog.overlayInstanceId,
                             overlayMemberDialog.selectedWidget.id)
                     }
                     overlayMemberDialog.close()
