@@ -21,6 +21,10 @@ PluginPage {
     // 时间组件本地配置（改动即整体提交）
     property var timeCfg: ({})
     property bool syncingTime: false
+    // 排除科目（按课表所选科目判定，与课程标题无关）
+    property bool excludedEnabled: false
+    property var excludedSubjects: []
+    property var subjectChoices: []
 
     Component.onCompleted: Qt.callLater(reload)
     onBackendChanged: { if (backend) Qt.callLater(reload) }
@@ -42,6 +46,7 @@ PluginPage {
             time_alternate_animation: info.time_alternate_animation === true
         }
         syncControls()
+        reloadExcluded()
     }
 
     function commitTime(key, value) {
@@ -61,7 +66,56 @@ PluginPage {
 
     function saveExcluded() {
         if (backend) backend.setExcludedLessonConfig(
-            excludedEnabledSwitch.checked, excludedLessonsField.text)
+            excludedEnabledSwitch.checked, page.excludedSubjects)
+    }
+
+    function reloadExcluded() {
+        if (!backend) return
+        var cfg = backend.getExcludedLessonConfig()
+        page.excludedEnabled = cfg ? (cfg.enabled === true) : false
+        page.excludedSubjects = (cfg && cfg.subjects) ? cfg.subjects.slice() : []
+    }
+
+    function allSubjectNames() {
+        var out = []
+        try {
+            var s = AppCentral.scheduleRuntime.subjects || []
+            for (var i = 0; i < s.length; i++) out.push(s[i].name)
+        } catch (e) {}
+        return out
+    }
+
+    function refreshSubjectMenu() {
+        var picked = page.excludedSubjects
+        page.subjectChoices = page.allSubjectNames().filter(function (n) {
+            return picked.indexOf(n) < 0
+        })
+    }
+
+    function addExcludedSubject(name) {
+        if (!name || page.excludedSubjects.indexOf(name) >= 0) return
+        if (page.excludedSubjects.length >= 20) return
+        var arr = page.excludedSubjects.slice()
+        arr.push(name)
+        page.excludedSubjects = arr
+        saveExcluded()
+    }
+
+    function removeExcludedSubject(name) {
+        page.excludedSubjects = page.excludedSubjects.filter(function (n) {
+            return n !== name
+        })
+        saveExcluded()
+    }
+
+    function subjectColor(name) {
+        try {
+            var s = AppCentral.scheduleRuntime.subjects || []
+            for (var i = 0; i < s.length; i++) {
+                if (s[i].name === name) return s[i].color || "#888888"
+            }
+        } catch (e) {}
+        return "#888888"
     }
 
     Connections {
@@ -74,7 +128,12 @@ PluginPage {
         anchors.margins: 24
         spacing: 16
 
-        Text { typography: Typography.BodyStrong; text: qsTr("组件动画") }
+        SettingExpander {
+            Layout.fillWidth: true
+            icon.name: "ic_fluent_timer_20_regular"
+            title: qsTr("组件动画")
+            description: qsTr("内置「事件倒计时」组件的数字滚动动画开关。")
+            expanded: false
 
         SettingCard {
             Layout.fillWidth: true
@@ -87,7 +146,14 @@ PluginPage {
             }
         }
 
-        Text { typography: Typography.BodyStrong; text: qsTr("时间组件") }
+        }
+
+        SettingExpander {
+            Layout.fillWidth: true
+            icon.name: "ic_fluent_clock_20_regular"
+            title: qsTr("时间组件")
+            description: qsTr("增强官方内置「时间」组件：数字滚动动画、显示秒/日期/星期、并排或交替布局。")
+            expanded: false
 
         SettingCard {
             Layout.fillWidth: true
@@ -197,7 +263,14 @@ PluginPage {
             }
         }
 
-        Text { typography: Typography.BodyStrong; text: qsTr("小组件高度") }
+        }
+
+        SettingExpander {
+            Layout.fillWidth: true
+            icon.name: "ic_fluent_resize_20_regular"
+            title: qsTr("小组件高度 / 深度")
+            description: qsTr("调节桌面组件的展示高度，以及隐藏时保留在屏幕边缘的可点击宽度。")
+            expanded: false
 
         SettingCard {
             Layout.fillWidth: true
@@ -261,12 +334,19 @@ PluginPage {
             }
         }
 
-        Text { typography: Typography.BodyStrong; text: qsTr("特定课程不隐藏") }
+        }
+
+        SettingExpander {
+            Layout.fillWidth: true
+            icon.name: "ic_fluent_eye_off_20_regular"
+            title: qsTr("特定课程不隐藏")
+            description: qsTr("当前课表科目在下方列表中时，主程序「在课堂中隐藏」不触发。")
+            expanded: false
 
         SettingCard {
             Layout.fillWidth: true
-            title: qsTr("排除课程")
-            description: qsTr("开启后，当前课程在下方列表中时，官方“在课堂中隐藏”不触发（参考一代 excluded_lessons）。")
+            title: qsTr("排除科目")
+            description: qsTr("开启后，当前课表科目在下方列表中时，主程序“在课堂中隐藏”不触发。按课程表编辑时该时间段所选科目判定，与课程标题无关。最多添加 20 个。")
 
             ColumnLayout {
                 Layout.fillWidth: true
@@ -274,20 +354,89 @@ PluginPage {
                 Switch {
                     id: excludedEnabledSwitch
                     text: qsTr("启用")
-                    checked: backend ? backend.getExcludedLessonConfig().enabled : false
+                    checked: page.excludedEnabled
                     onToggled: saveExcluded()
                 }
-                TextField {
-                    id: excludedLessonsField
+
+                RowLayout {
                     Layout.fillWidth: true
-                    placeholderText: qsTr("课程名，逗号分隔，如：自习,体育")
-                    text: backend ? backend.getExcludedLessonConfig().lessons : ""
-                    onEditingFinished: saveExcluded()
+                    spacing: 8
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 4
+
+                        Text {
+                            visible: page.excludedSubjects.length === 0
+                            typography: Typography.Caption
+                            text: qsTr("尚未添加科目")
+                        }
+
+                        Repeater {
+                            model: page.excludedSubjects
+                            delegate: RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                Rectangle {
+                                    width: 6
+                                    height: 20
+                                    radius: 3
+                                    color: page.subjectColor(modelData)
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: modelData
+                                    elide: Text.ElideRight
+                                }
+                                ToolButton {
+                                    icon.name: "ic_fluent_delete_20_regular"
+                                    onClicked: page.removeExcludedSubject(modelData)
+                                }
+                            }
+                        }
+                    }
+
+                    ToolButton {
+                        Layout.alignment: Qt.AlignTop
+                        icon.name: "ic_fluent_add_20_regular"
+                        enabled: page.excludedSubjects.length < 20
+                        onClicked: subjectMenu.open()
+                    }
+                }
+
+                Menu {
+                    id: subjectMenu
+                    height: implicitHeight
+                    onAboutToShow: page.refreshSubjectMenu()
+                    // 预置固定数量项、用 visible 控制显隐：不动态增删 items。
+                    // RinUI 的 Menu 在动态插入项的布局/生命周期上不稳，固定项最稳（同官方 FilterToolbar）。
+                    // 上限 20 个科目，与加号按钮的 enabled 一致。
+                    Repeater {
+                        model: 20
+                        MenuItem {
+                            required property int index
+                            visible: index < page.subjectChoices.length
+                            text: index < page.subjectChoices.length ? page.subjectChoices[index] : ""
+                            onTriggered: {
+                                if (index < page.subjectChoices.length) {
+                                    page.addExcludedSubject(page.subjectChoices[index])
+                                    subjectMenu.close()
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        Text { typography: Typography.BodyStrong; text: qsTr("补丁注入") }
+        }
+
+        SettingExpander {
+            Layout.fillWidth: true
+            icon.name: "ic_fluent_arrow_sync_20_regular"
+            title: qsTr("补丁注入")
+            description: qsTr("向主程序注入补丁的状态；异常时可手动重新注入。")
+            expanded: false
 
         SettingCard {
             Layout.fillWidth: true
@@ -313,10 +462,12 @@ PluginPage {
             }
         }
 
+        }
+
         SettingCard {
             Layout.fillWidth: true
             title: qsTr("说明")
-            description: qsTr("本插件融合：事件倒计时动画开关、时间组件增强、小组件高度/深度、堆叠组件。\n安装后如未立即生效，请重启 Class Widgets 2；卸载插件后主程序恢复原始样式。")
+            description: qsTr("本插件融合：事件倒计时动画开关、时间组件增强、小组件高度/深度、堆叠组件。\n安装后如未立即生效，请重启 Class Widgets 2；卸载插件后主程序恢复原始样式。\n若补丁未注入成功，请卸载此插件，并反馈给开发者。")
         }
     }
 }

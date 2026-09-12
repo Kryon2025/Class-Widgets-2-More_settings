@@ -40,6 +40,7 @@ class MoreSettingsConfig(ConfigBaseModel):
     display_height: float = -1             # 展示高度（px；-1 = 跟随默认偏移）
     hide_depth: float = 24                 # 隐藏深度（px）
 
-    # 特定课程不隐藏（官方"在课堂中隐藏"的排除，参考一代 excluded_lesson/excluded_lessons）
+    # 特定课程不隐藏（仅在主程序"在课堂中隐藏"时生效；按课表所选科目判定）
     hide_excluded_enabled: bool = False    # 开关
-    hide_excluded_lessons: str = ""        # 课程名列表（逗号分隔，如：自习,体育）
+    hide_excluded_lessons: str = ""        # 旧版：课程名列表（逗号分隔，保留兼容）
+    hide_excluded_subjects: str = "[]"     # 科目列表（JSON 数组，如 ["自习","体育"]）

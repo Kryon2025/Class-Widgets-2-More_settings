@@ -103,6 +103,28 @@ SettingsLayout {
 
     SettingCard {
         Layout.fillWidth: true
+        title: "组件框大小模式"
+        description: "固定为最大组件：始终以最大成员组件的边框为组件框大小；跟随当前组件：组件框随当前展示组件的大小平滑变化。"
+
+        ComboBox {
+            Layout.preferredWidth: 240
+            textRole: "text"
+            valueRole: "value"
+            model: [
+                { text: "固定为最大组件", value: "max" },
+                { text: "跟随当前组件", value: "auto" }
+            ]
+            Component.onCompleted: {
+                var v = settings.frame_mode || "max"
+                var i = indexOfValue(v)
+                currentIndex = i >= 0 ? i : 0
+            }
+            onActivated: settings.frame_mode = currentValue
+        }
+    }
+
+    SettingCard {
+        Layout.fillWidth: true
         title: "组件框尺寸"
         description: "自定义本堆叠组件的框宽高（自适应 = 跟随内容）。"
 
@@ -133,6 +155,17 @@ SettingsLayout {
         Switch {
             checked: settings.show_switch_bar !== false
             onCheckedChanged: settings.show_switch_bar = checked
+        }
+    }
+
+    SettingCard {
+        Layout.fillWidth: true
+        title: "歌词感知轮播"
+        description: "开启后：歌词岛 / MediaWidgets 未获取到歌词或播放信息时不参与轮播；若全部成员均无内容则整个组件自动隐藏，直到再次获取到内容。默认关闭。"
+
+        Switch {
+            checked: settings.lyric_gate === true
+            onCheckedChanged: settings.lyric_gate = checked
         }
     }
 

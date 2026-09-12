@@ -34,7 +34,7 @@ _COUNTDOWN_PATCH = Path(__file__).resolve().parent / "qml" / "eventCountdown.pat
 _TIME_PATCH = Path(__file__).resolve().parent / "qml" / "time.patch.qml"
 _NO_DIALOG_MARK = "NO_DIALOG_ORIG"
 
-_OVERLAY_MARKER = "overlayEditMode"
+_OVERLAY_MARKER = "overlayEditingId"
 _COUNTDOWN_MARK = "// [patched by com.kryon.more_settings v2]"
 _COUNTDOWN_OLD_MARK = "// [patched by com.event.countdown.anim]"
 _TIME_MARK = "// [patched by com.kryon.more_settings v2]"
@@ -97,23 +97,74 @@ def _write(path, text, crlf):
     path.write_bytes(data)
 
 
-def _apply(text, ops, tag):
-    """顺序执行锚点替换（幂等：new 已存在则跳过该 op）。"""
+def _apply(text, ops, tag, logger=None):
+    """顺序执行锚点替换（幂等：new 已存在则跳过该 op）。
+
+    容错：某个锚点未找到 / 重复时跳过该 op 并记录警告，不中断其余补丁，
+    以兼容不同主程序版本的差异（避免单点失配导致整批补丁失效）。
+    """
+    for old, new in ops:
+        if new in text:
+            continue
+        candidates = old if isinstance(old, (list, tuple)) else [old]
+        hit = None
+        dup = False
+        for cand in candidates:
+            n = text.count(cand)
+            if n > 1:
+                if logger:
+                    logger.warning(f"[more_settings] {tag}: 锚点重复({n})，跳过: {cand[:50]!r}")
+                dup = True
+                break
+            if n == 1:
+                hit = cand
+        if dup:
+            continue
+        if hit is None:
+            if logger:
+                logger.warning(
+                    f"[more_settings] {tag}: 锚点未找到，跳过（版本差异）: {candidates[0][:50]!r}")
+            continue
+        text = text.replace(hit, new, 1)
+    return text
+
+
+def _apply_group(text, ops, tag, logger=None):
+    """一组强相关的补丁：逐个应用，任一 op 的锚点找不到就整组放弃。
+
+    用于 overlay 这类"引用与定义必须成套"的补丁——先应用到临时副本，某个锚点
+    缺失就返回原文，避免部分注入造成主程序 QML 加载失败（崩溃）。
+    按顺序应用，后面的 op 可以依赖前面 op 刚产生的内容。
+    """
+    original = text
     for old, new in ops:
         if new in text:
             continue
         candidates = old if isinstance(old, (list, tuple)) else [old]
         hit = None
         for cand in candidates:
-            n = text.count(cand)
-            if n > 1:
-                raise RuntimeError(f"{tag}: 锚点重复 ({n}): {cand[:60]!r}")
-            if n == 1:
+            if text.count(cand) == 1:
                 hit = cand
+                break
         if hit is None:
-            raise RuntimeError(f"{tag}: 锚点未找到: {candidates[0][:60]!r}（主程序版本不兼容）")
+            if logger:
+                logger.warning(
+                    f"[more_settings] {tag}: 关键锚点缺失（主程序版本差异），已整组跳过以保证安全")
+            return original
         text = text.replace(hit, new, 1)
     return text
+
+
+def _assert_qml_consistent(text, tag):
+    """写入前自检：任一不一致都抛错（由调用方回滚）。
+
+    宁可该补丁不生效，也不能让主程序因 QML 加载失败而崩溃。
+    """
+    if "AddOverlayMemberDialog" in text and 'import "dialogs"' not in text:
+        raise RuntimeError(f"{tag}: 引用了 AddOverlayMemberDialog 却缺少 import \"dialogs\"")
+    if text.count("{") != text.count("}"):
+        raise RuntimeError(
+            f"{tag}: 花括号不平衡（{text.count('{')} vs {text.count('}')}），疑似锚点半匹配")
 
 
 # ── 小组件高度补丁片段 ────────────────────────────────────────
@@ -223,7 +274,9 @@ _EDITROW_TAIL_NEW = _EDITROW_TAIL_ANCHOR + """
                     onClicked: if (loader.item) loader.item.resetFrame()
                 }"""
 
-_CONTAINER_OPS = [
+# overlay 相关补丁（原子组：任一关键锚点缺失则整组跳过，
+# 避免"引用了 AddOverlayMemberDialog 却缺 import / 组件文件"导致主程序 QML 加载失败）
+_CONTAINER_OVERLAY_OPS = [
     ("import ClassWidgets.Easing",
      "import ClassWidgets.Easing\nimport \"dialogs\""),
     ("    property bool editMode: false",
@@ -286,7 +339,11 @@ _CONTAINER_OPS = [
                     id: addOverlayMemberButton
                     icon.name: "ic_fluent_add_20_regular"
                     text: qsTr("Add Member")
-                    onClicked: addOverlayMemberDialog.open()
+                    onClicked: {
+                        // 正在编辑的堆叠组件实例 → 成员加到该实例下
+                        addOverlayMemberDialog.overlayInstanceId = model.instanceId
+                        addOverlayMemberDialog.open()
+                    }
                 }
 
                 Button {
@@ -338,6 +395,11 @@ _CONTAINER_OPS = [
     ("""        visible: widgetsContainer.editMode || widgetRepeater.count === 0""",
      """        visible: (widgetsContainer.editMode || widgetRepeater.count === 0)
             && widgetsContainer.overlayEditingId === ''"""),
+    (_ADD_MEMBER_OLD, _ADD_MEMBER_NEW),
+]
+
+# 与 overlay 无关的修正：给组件设置页注入 backendObj（独立应用，不受 overlay 锚点影响）
+_CONTAINER_MISC_OPS = [
     (["""                                settingsDialog.setSource(model.settingsQml, {
                                     "settings": model.settings,
                                     "instanceId": model.instanceId
@@ -351,7 +413,18 @@ _CONTAINER_OPS = [
                                     "instanceId": model.instanceId,
                                     "backendObj": model.backendObj
                                 })"""),
-    (_ADD_MEMBER_OLD, _ADD_MEMBER_NEW),
+    # 新版主程序：setSource 增加 widget_id 字段（单独一 op，兼容两种版本）
+    ("""                                settingsDialog.setSource(model.settingsQml, {
+                                    "settings": model.settings,
+                                    "instanceId": model.instanceId,
+                                    "widget_id": model.widget_id
+                                })""",
+     """                                settingsDialog.setSource(model.settingsQml, {
+                                    "settings": model.settings,
+                                    "instanceId": model.instanceId,
+                                    "widget_id": model.widget_id,
+                                    "backendObj": model.backendObj
+                                })"""),
 ]
 
 _WLOADER_OPS = [
@@ -415,33 +488,45 @@ def install_all(logger, root=None):
 
     # 1) 小组件高度补丁（WidgetsContainer.qml）
     # 2) 堆叠补丁（WidgetsContainer.qml + WidgetLoader.qml + dialog）
+    # 3) 组件动画开关补丁
+    # 全部先改内存、自检通过后再落盘；任一步失败立即回滚，保证主程序始终可用。
     try:
         c_text, c_crlf = _read(container)
         c_text = _apply_height(c_text)
-        c_text = _apply(c_text, _CONTAINER_OPS, "WidgetsContainer.qml")
-        _write(container, c_text, c_crlf)
+        c_text = _apply(c_text, _CONTAINER_MISC_OPS, "WidgetsContainer.qml", logger)
+        c_text = _apply_group(c_text, _CONTAINER_OVERLAY_OPS, "WidgetsContainer.qml", logger)
+
+        # overlay 引用了对话框就必须保证组件文件存在，否则回滚
+        if "AddOverlayMemberDialog" in c_text and not _DIALOG_SRC.is_file():
+            raise RuntimeError("缺少 AddOverlayMemberDialog.qml 资源文件")
+        _assert_qml_consistent(c_text, "WidgetsContainer.qml")
 
         w_text, w_crlf = _read(wloader)
-        w_text = _apply(w_text, _WLOADER_OPS, "WidgetLoader.qml")
+        w_text = _apply(w_text, _WLOADER_OPS, "WidgetLoader.qml", logger)
+        _assert_qml_consistent(w_text, "WidgetLoader.qml")
+
+        _write(container, c_text, c_crlf)
         _write(wloader, w_text, w_crlf)
 
-        # 插件专有文件：始终同步最新版（官方主程序无此文件，覆盖安全）
-        if not _DIALOG_SRC.is_file():
-            raise RuntimeError("缺少 AddOverlayMemberDialog.qml 资源文件")
-        dialog.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(_DIALOG_SRC, dialog)
+        # 插件专有对话框：官方原本没有才注入（官方已有则保留官方版本，避免破坏）
+        if "AddOverlayMemberDialog" in c_text:
+            dialog.parent.mkdir(parents=True, exist_ok=True)
+            if not dialog.is_file():
+                shutil.copy2(_DIALOG_SRC, dialog)
+            else:
+                logger.info("[more_settings] 官方已有 AddOverlayMemberDialog.qml，保留官方版本")
+
+        # 组件动画开关补丁（整体替换；失败同样回滚）
+        _install_qml_replace(logger, root / _COUNTDOWN_REL, _COUNTDOWN_PATCH,
+                             _COUNTDOWN_MARK, [_COUNTDOWN_OLD_MARK],
+                             backup_dir / "eventCountdown.qml.orig", "事件倒计时")
+        _install_qml_replace(logger, root / _TIME_REL, _TIME_PATCH,
+                             _TIME_MARK, [],
+                             backup_dir / "Time.qml.orig", "时间")
     except Exception as e:
         restore_all(logger)
         logger.error(f"[more_settings] 集成补丁失败，已还原: {e}")
         return False
-
-    # 3) 组件动画开关补丁（整体替换 + .orig 备份）
-    _install_qml_replace(logger, root / _COUNTDOWN_REL, _COUNTDOWN_PATCH,
-                         _COUNTDOWN_MARK, [_COUNTDOWN_OLD_MARK],
-                         backup_dir / "eventCountdown.qml.orig", "事件倒计时")
-    _install_qml_replace(logger, root / _TIME_REL, _TIME_PATCH,
-                         _TIME_MARK, [],
-                         backup_dir / "Time.qml.orig", "时间")
 
     logger.info("[more_settings] 主程序集成补丁已安装")
     return True
@@ -480,10 +565,12 @@ def _install_qml_replace(logger, target, patch_src, our_mark, old_marks, backup,
         text, crlf = _read(target)
         if our_mark in text:
             return
+        patch_text, patch_crlf = _read(patch_src)
+        # 替换前自检补丁本身完整，避免把坏文件写进主程序（失败会向上抛，触发整体回滚）
+        _assert_qml_consistent(patch_text, f"{tag}补丁")
         # 备份（首次；被旧插件补丁过时备份的是当前文件，仍可还原）
         if not backup.is_file():
             _backup_file(target, backup)
-        patch_text, patch_crlf = _read(patch_src)
         _write(target, patch_text, patch_crlf)
         logger.info(f"[more_settings] 已为{tag}组件应用动画开关补丁")
     except OSError as e:

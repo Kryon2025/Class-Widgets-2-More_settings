@@ -68,7 +68,7 @@ class Plugin(CW2Plugin):
                 qml_path="qml/overlay.qml",
                 backend_obj=self.overlay,
                 settings_qml="qml/overlay-settings.qml",
-                default_settings={"interval_ms": 5000},
+                default_settings={"interval_ms": 5000, "lyric_gate": False},
             )
             logger.info("[more_settings] 堆叠组件注册成功")
         except Exception as e:
@@ -165,15 +165,26 @@ class Plugin(CW2Plugin):
 
     @Slot(result=dict)
     def getExcludedLessonConfig(self) -> dict:
+        try:
+            subjects = json.loads(self._config.hide_excluded_subjects or "[]")
+            if not isinstance(subjects, list):
+                subjects = []
+        except Exception:
+            subjects = []
         return {
             "enabled": self._config.hide_excluded_enabled,
-            "lessons": self._config.hide_excluded_lessons,
+            "subjects": [str(s) for s in subjects],
         }
 
-    @Slot(bool, str)
-    def setExcludedLessonConfig(self, enabled: bool, lessons: str) -> None:
+    @Slot(bool, list)
+    def setExcludedLessonConfig(self, enabled: bool, subjects: list) -> None:
+        clean = []
+        for s in (subjects or []):
+            s = str(s).strip()
+            if s and s not in clean:
+                clean.append(s)
         self._config.hide_excluded_enabled = bool(enabled)
-        self._config.hide_excluded_lessons = str(lessons or "")
+        self._config.hide_excluded_subjects = json.dumps(clean, ensure_ascii=False)
         self._save_config()
         self.configChanged.emit()
 
@@ -197,7 +208,7 @@ class Plugin(CW2Plugin):
         root = Path(root)
         checks = [
             (root / "src" / "qml" / "ClassWidgets" / "Components" / "WidgetsContainer.qml",
-             "overlayEditMode"),
+             "overlayEditingId"),
             (root / "src" / "qml" / "ClassWidgets" / "Components" / "WidgetLoader.qml",
              "overlayListMode"),
             (root / "src" / "qml" / "widgets" / "eventCountdown.qml",
@@ -221,26 +232,31 @@ class Plugin(CW2Plugin):
         QTimer.singleShot(0, lambda: self._apply_excluded_lesson(status))
 
     def _apply_excluded_lesson(self, status: str) -> None:
+        """仅在主程序"在课堂中隐藏"时生效：按当前课表科目（而非课程标题）判定。"""
         try:
             if not self._config.hide_excluded_enabled:
                 return
             if status not in ("class", "activity"):
                 return
-            current = (self.api.runtime.current_title or "").strip()
-            if not current:
+            subject = (getattr(self.api.runtime, "current_subject", "") or "").strip()
+            if not subject:
                 return
-            lessons = re.split(r"[,，、\s]+", self._config.hide_excluded_lessons or "")
-            if current not in {s for s in lessons if s}:
+            try:
+                subjects = json.loads(self._config.hide_excluded_subjects or "[]")
+            except Exception:
+                subjects = []
+            if not isinstance(subjects, list) or subject not in subjects:
                 return
+            # 仅纠正官方"在课堂中隐藏"（auto hide）的效果
             configs = self.api.globalconfig.configs
             action = str(configs.interactions.hide.action)
             if action == "mini_mode":
                 configs.preferences.mini_mode = False
             else:
                 configs.interactions.hide.state = False
-            logger.info("[more_settings] 特定课程不隐藏已生效: {}", current)
+            logger.info("[more_settings] 特定科目不隐藏已生效: {}", subject)
         except Exception as e:
-            logger.warning("[more_settings] 特定课程不隐藏处理失败: {}", e)
+            logger.warning("[more_settings] 特定科目不隐藏处理失败: {}", e)
 
     def _save_config(self) -> None:
         try:

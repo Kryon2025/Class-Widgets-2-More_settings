@@ -140,11 +140,44 @@ Item {
     property var members: []
     property int activeIndex: 0
     property var defs: WidgetsModel ? WidgetsModel.definitionsList : []
-    property int maxW: 0
-    property int maxH: 0
+    // 每个成员 key -> {w, h}；maxW/maxH/autoW/autoH 都由它派生。
+    // 轮播模式容器尺寸跟随「当前成员」尺寸（而非所有成员的最大值），
+    // 配合 implicitWidth/Height 的 Behavior，切换时组件框从旧尺寸平滑过渡到新尺寸。
+    property var sizeMap: ({})
     property int listSpacing: 10
-    readonly property int autoW: Math.max(96, root.maxW + root.switchBarSpace)
-    readonly property int autoH: Math.max(80, root.maxH)
+    readonly property int maxW: root.maxSize().w
+    readonly property int maxH: root.maxSize().h
+    // 组件框尺寸模式：max = 固定为最大成员（原始设计，切换时框大小不变）；
+    // auto = 跟随当前成员（切换时框大小平滑过渡）。默认 max。
+    property string frameMode: (settings && settings.frame_mode) ? settings.frame_mode : "max"
+    readonly property int autoW: Math.max(96,
+        (root.frameMode === "auto" ? root.activeSize().w : root.maxW) + root.switchBarSpace)
+    readonly property int autoH: Math.max(80,
+        root.frameMode === "auto" ? root.activeSize().h : root.maxH)
+
+    function maxSize() {
+        var w = 0, h = 0
+        for (var k in root.sizeMap) {
+            w = Math.max(w, root.sizeMap[k].w)
+            h = Math.max(h, root.sizeMap[k].h)
+        }
+        return { w: w, h: h }
+    }
+
+    function activeSize() {
+        var m = root.members[root.activeIndex]
+        var s = m ? root.sizeMap[m.key] : null
+        return s ? s : { w: 96, h: 80 }
+    }
+
+    function reportSize(key, w, h) {
+        var old = root.sizeMap[key]
+        if (old && old.w === w && old.h === h) return
+        var m = {}
+        for (var k in root.sizeMap) m[k] = root.sizeMap[k]
+        m[key] = { w: Math.max(0, w), h: Math.max(0, h) }
+        root.sizeMap = m
+    }
 
     // 自定义组件框宽高（0 = 跟随内容自适应；按实例持久化于后端）
     property int frameW: 0
@@ -153,14 +186,90 @@ Item {
     // 右侧切换条占位宽度（仅显示切换条时预留，保证不超出组件边界被裁剪）
     property int switchBarSpace: root.showSwitchBar && root.members.length > 0 ? 48 : 0
 
+    // ── 歌词门控模式（默认关闭，组件设置 lyric_gate 控制）──────────────
+    // 媒体类成员（歌词岛 / MediaWidgets）未获取到歌词或播放信息时，轮播跳过它；
+    // 若全部成员均无内容，则整个堆叠组件自动隐藏，直到再次检测到歌词/播放。
+    property bool lyricGateActive: settings && settings.lyric_gate === true
+    property var contentMap: ({})   // 成员 key -> 是否有内容（仅媒体类成员）
+
+    function isGatedMember(typeId) {
+        return typeId === "com.lyricsisland"
+            || typeId === "com.seiraiharaguchi.mediawidgets"
+    }
+
+    function memberHasContent(key, typeId) {
+        if (!root.isGatedMember(typeId)) return true
+        var v = root.contentMap[key]
+        return v === undefined ? true : v
+    }
+
+    function memberRotatable(m) {
+        if (!root.lyricGateActive || !m) return true
+        return root.memberHasContent(m.key, m.typeId)
+    }
+
+    function reportContent(key, val) {
+        if (root.contentMap[key] === val) return
+        var m = root.contentMap
+        m[key] = val
+        root.contentMap = m
+    }
+
+    // 读取成员后端是否"有内容"（歌词/播放）；无法判断时视为有内容（避免误隐藏）
+    function backendHasContent(item) {
+        if (!item || !item.backend) return true
+        var b = item.backend
+        try {
+            if (b.lyricStatus !== undefined) return String(b.lyricStatus) === "ok"
+            if (b.hasLyrics !== undefined) return !!b.hasLyrics
+            if (b.isPlaying !== undefined) return !!b.isPlaying
+            if (b.hasMedia !== undefined) return !!b.hasMedia
+            if (b.playing !== undefined) return !!b.playing
+        } catch (e) {}
+        return true
+    }
+
+    // 门控开启且所有成员都无内容 -> 整个组件隐藏
+    readonly property bool gateHide: {
+        if (!root.lyricGateActive || root.members.length === 0) return false
+        for (var i = 0; i < root.members.length; i++) {
+            if (root.memberRotatable(root.members[i])) return false
+        }
+        return true
+    }
+
+    function pollContent() {
+        for (var k = 0; k < memberRepeater.count; k++) {
+            var obj = memberRepeater.itemAt(k)
+            if (obj && obj.item) root.reportContent(obj.memberId, root.backendHasContent(obj.item))
+        }
+    }
+
     // 迷你模式（主程序全局配置）：容器与切换条高度跟随，与其它组件保持一致
     readonly property bool miniMode: Configs.data.preferences.mini_mode
 
     // 轮播模式框尺寸：frameW/H > 0 时用自定义值，否则自动；迷你模式保持全局一致
-    implicitWidth: root.frameW > 0 ? root.frameW : root.autoW
-    implicitHeight: root.overlayListMode
-        ? Math.max(80, root.listTotalH())
-        : (root.miniMode ? 56 : (root.frameH > 0 ? root.frameH : root.autoH))
+    // 门控隐藏时收缩为 0，配合 visible 让主程序组件卡片一并收起
+    implicitWidth: root.gateHide ? 0 : (root.frameW > 0 ? root.frameW : root.autoW)
+    implicitHeight: root.gateHide
+        ? 0
+        : (root.overlayListMode
+            ? Math.max(80, root.listTotalH())
+            : (root.miniMode ? 56 : (root.frameH > 0 ? root.frameH : root.autoH)))
+    // 组件框尺寸过渡（仅自适应尺寸的轮播模式启用）：
+    // 小→大：边框从旧尺寸延伸；大→小：边框向内收缩，到新尺寸后停止
+    Behavior on implicitWidth {
+        enabled: !root.overlayListMode && !root.gateHide && root.frameW === 0
+            && root.frameMode === "auto"
+        NumberAnimation { duration: 320; easing.type: Easing.InOutCubic }
+    }
+    Behavior on implicitHeight {
+        enabled: !root.overlayListMode && !root.gateHide && root.frameH === 0
+            && root.frameMode === "auto"
+        NumberAnimation { duration: 320; easing.type: Easing.InOutCubic }
+    }
+    // 门控隐藏（编辑态除外）：整个堆叠组件不显示
+    visible: root.overlayListMode || !root.gateHide
 
     // 轮播间隔由组件设置 interval_ms 控制（列表模式 / 编辑模式暂停）
     property int carouselInterval: settings && settings.interval_ms ? settings.interval_ms : 5000
@@ -176,8 +285,26 @@ Item {
         running: root.members.length > 1 && !root.editMode && !root.overlayListMode
             && !Configs.data.interactions.hide.state
         onTriggered: {
-            root.activeIndex = (root.activeIndex + 1) % root.members.length
+            var n = root.members.length
+            if (n === 0) return
+            var i = root.activeIndex
+            // 门控开启时跳过无内容的媒体成员；全部无内容则原地不动（组件已隐藏）
+            for (var k = 0; k < n; k++) {
+                i = (i + 1) % n
+                if (root.memberRotatable(root.members[i])) {
+                    root.activeIndex = i
+                    return
+                }
+            }
         }
+    }
+
+    // 门控模式：每秒轮询各成员内容状态（不依赖各插件信号名），驱动跳过与自动隐藏
+    Timer {
+        interval: 1000
+        repeat: true
+        running: root.lyricGateActive
+        onTriggered: root.pollContent()
     }
 
     Connections {
@@ -323,15 +450,25 @@ Item {
         root.updateClassState()
     }
 
-    // 空状态提示（无成员时）
-    Text {
+    // 空状态提示（无成员时）：两行分开渲染，避免行高叠字
+    Column {
         anchors.centerIn: parent
         visible: root.members.length === 0
-        text: "堆叠组件\n右键编辑添加成员"
-        horizontalAlignment: Text.AlignHCenter
-        color: Theme.isDark() ? Qt.rgba(1, 1, 1, 0.55) : Qt.rgba(0, 0, 0, 0.55)
-        font.pixelSize: 13
-        lineHeight: 1.4
+        spacing: 6
+
+        Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: "堆叠组件"
+            color: Theme.isDark() ? Qt.rgba(1, 1, 1, 0.6) : Qt.rgba(0, 0, 0, 0.6)
+            font.pixelSize: 13
+            font.weight: Font.DemiBold
+        }
+        Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: "右键编辑添加成员"
+            color: Theme.isDark() ? Qt.rgba(1, 1, 1, 0.5) : Qt.rgba(0, 0, 0, 0.5)
+            font.pixelSize: 12
+        }
     }
 
     // 成员：轮播模式叠放居中（仅 activeIndex 显示，交叉淡化 + 缩放）；
@@ -345,21 +482,24 @@ Item {
             id: memberLoader
             asynchronous: true
             z: index === root.activeIndex ? 1 : 0
-            // 轮播模式在内容区（排除右侧切换条）居中；列表模式纵列
-            x: root.overlayListMode ? 0 : (Math.max(0, parent.width - root.switchBarSpace - width)) / 2
+            // 轮播模式在内容区（排除右侧切换条）居中，非激活项按左右方向偏移，
+            // 切换时呈"整屏左右滑动"过渡（横向位移 + 淡化缩放）；列表模式纵列
+            x: root.overlayListMode
+                ? 0
+                : (Math.max(0, parent.width - root.switchBarSpace - width)) / 2
             y: root.overlayListMode ? root.listY(index) : (parent.height - height) / 2
             opacity: root.overlayListMode
                 ? 1
                 : (index === root.activeIndex ? 1 : 0)
             scale: root.overlayListMode
                 ? 1
-                : (index === root.activeIndex ? 1 : 0.9)
+                : (index === root.activeIndex ? 1 : 0.96)
 
             Behavior on opacity {
-                NumberAnimation { duration: 420; easing.type: Easing.InOutQuad }
+                NumberAnimation { duration: 380; easing.type: Easing.InOutQuad }
             }
             Behavior on scale {
-                NumberAnimation { duration: 420; easing.type: Easing.OutCubic }
+                NumberAnimation { duration: 320; easing.type: Easing.InOutCubic }
             }
 
             // 右键成员 → 单独编辑该组件设置（仅编辑堆叠组件模式生效；
@@ -406,11 +546,12 @@ Item {
                         item.settings = root.mergedMemberSettings(memberId, memberTypeId)
                     }
                 }
-                // 记录成员尺寸（容器随之固定；列表模式用固定行高排布）
+                // 记录成员尺寸（容器跟随当前成员尺寸过渡；列表模式用固定行高排布）
                 if (item) {
-                    root.maxW = Math.max(root.maxW, item.implicitWidth)
-                    root.maxH = Math.max(root.maxH, item.height)
+                    root.reportSize(memberId, item.implicitWidth, item.height)
                 }
+                // 门控模式：记录该成员初始内容状态
+                root.reportContent(memberId, root.backendHasContent(item))
             }
 
             // 成员尺寸实际变化（迷你模式切换等）：延迟到绑定传播完成后
@@ -418,15 +559,14 @@ Item {
             onHeightChanged: {
                 if (!item) return
                 Qt.callLater(function() {
-                    root.maxW = 0
-                    root.maxH = 0
+                    var m = {}
                     for (var k = 0; k < memberRepeater.count; k++) {
                         var obj = memberRepeater.itemAt(k)
                         if (obj && obj.item) {
-                            root.maxW = Math.max(root.maxW, obj.item.implicitWidth)
-                            root.maxH = Math.max(root.maxH, obj.item.height)
+                            m[obj.memberId] = { w: obj.item.implicitWidth, h: obj.item.height }
                         }
                     }
+                    root.sizeMap = m
                 })
             }
 
@@ -461,14 +601,21 @@ Item {
         // 圆角跟随主程序"小组件外观"设置（Corner Radius）；
         // 迷你模式等窄高场景自动收小，避免圆角超过短边
         radius: Math.min(width, height, Configs.data.preferences.widget_corner_radius)
-        // 背景不透明度跟随主程序小组件外观设置
-        opacity: Configs.data.preferences.opacity
         // 固定在组件内部右侧（组件宽度已为其预留空间，不被外层裁剪）
         x: root.width - 48
         y: (root.height - height) / 2
-        color: Theme.isDark() ? Qt.rgba(0.14, 0.14, 0.16, 0.9) : Qt.rgba(0.98, 0.98, 1, 0.92)
-        border.color: Theme.isDark() ? Qt.rgba(1, 1, 1, 0.18) : Qt.rgba(0, 0, 0, 0.12)
-        border.width: 1
+        color: "transparent"
+
+        // 背景：与主程序小组件卡片完全一致（底色 / 描边 / 不透明度）；
+        // 单独一层，应用透明度时不淡化前景"切换"文字
+        Rectangle {
+            anchors.fill: parent
+            radius: switchBar.radius
+            color: Theme.isDark() ? Qt.alpha("#1E1D22", 0.65) : Qt.alpha("#FBFAFF", 0.7)
+            opacity: Configs.data.preferences.opacity
+            border.color: Theme.isDark() ? Qt.alpha("#ffffff", 0.4) : Qt.alpha("#ffffff", 1)
+            border.width: 1
+        }
 
         Text {
             anchors.centerIn: parent
