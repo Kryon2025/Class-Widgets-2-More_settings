@@ -27,6 +27,34 @@ _OVERLAY_WIDGET_ID = "com.overlay"  # 堆叠组件自身 widget id（禁止添�
 _DEFAULT = "default"                # 旧单组数据的归属组
 
 
+def _data_dir() -> Path:
+    """插件用户数据目录：<主程序根>/configs/plugins/<插件ID>。
+
+    不能写进插件自己的目录：覆盖更新会把 plugins/<插件ID>/ 整个替换掉，
+    浮层成员、成员设置、框尺寸、上课时段这些配置会跟着消失。
+    configs/ 归主程序管，更新插件不会动它。
+    """
+    try:
+        d = Path(__file__).resolve().parent.parent.parent / "configs" / "plugins" / "com.kryon.more_settings"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+    except Exception:
+        return Path(__file__).resolve().parent
+
+
+def _data_file(name: str) -> Path:
+    """数据文件路径；顺带把旧版写在插件目录里的同名文件迁移一次。"""
+    old = Path(__file__).resolve().parent / name
+    new = _data_dir() / name
+    try:
+        if old.exists() and not new.exists():
+            new.parent.mkdir(parents=True, exist_ok=True)
+            new.write_bytes(old.read_bytes())
+    except Exception:
+        pass
+    return new
+
+
 def _normalize(instance_id) -> str:
     return str(instance_id or "").strip() or _DEFAULT
 
@@ -43,11 +71,10 @@ class OverlayBackend(QObject):
         super().__init__(parent)
         # store: gid -> {"members": [{key,typeId}...], "settings": {key: {...}}, "frame": {"w":0,"h":0}}
         self._store: dict[str, dict] = {}
-        base = Path(__file__).resolve().parent
-        self._members_file = base / ".overlay_members.json"
-        self._settings_file = base / ".overlay_member_settings.json"
-        self._frames_file = base / ".overlay_frames.json"
-        self._class_hide_file = base / ".overlay_class_hide.json"
+        self._members_file = _data_file(".overlay_members.json")
+        self._settings_file = _data_file(".overlay_member_settings.json")
+        self._frames_file = _data_file(".overlay_frames.json")
+        self._class_hide_file = _data_file(".overlay_class_hide.json")
         self._load_members()
         self._load_member_settings()
         self._load_frames()
