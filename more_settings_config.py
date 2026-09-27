@@ -1,4 +1,4 @@
-"""Kryon 的更多设置 —— 统一配置模型。
+"""Kryon 的扩展设置 —— 统一配置模型。
 
 配置经官方插件配置通道持久化，存储于
 ``configs.json -> plugins.configs.com.kryon.more_settings``。
@@ -19,7 +19,7 @@ from ClassWidgets.SDK import ConfigBaseModel
 
 
 class MoreSettingsConfig(ConfigBaseModel):
-    """Kryon 的更多设置配置。"""
+    """Kryon 的扩展设置配置。"""
 
     # 事件倒计时
     countdown_animation: bool = True

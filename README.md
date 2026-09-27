@@ -1,7 +1,7 @@
 <div align="center">
 
 <h1>
-  Kryon的更多设置
+  Kryon的扩展设置
 </h1>
 
 </div>

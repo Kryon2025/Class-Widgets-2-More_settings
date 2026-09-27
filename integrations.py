@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Kryon 的更多设置 —— 主程序集成补丁模块。
+"""Kryon 的扩展设置 —— 主程序集成补丁模块。
 
 融合三类补丁：
 1. 小组件高度/深度（原 com.kryon.widgets-high）：
@@ -28,10 +28,8 @@ _TIME_REL = Path("src") / "qml" / "widgets" / "Time.qml"
 
 _BACKUP_ROOT = ".cwplugin_backups"
 _BACKUP_SUB = "more_settings"
-_DIALOG_SRC = Path(__file__).resolve().parent / "host_patch" / "AddOverlayMemberDialog.qml"
-_EDITDLG_SRC = Path(__file__).resolve().parent / "host_patch" / "EditOverlayDialog.qml"
-_COUNTDOWN_PATCH = Path(__file__).resolve().parent / "qml" / "eventCountdown.patch.qml"
-_TIME_PATCH = Path(__file__).resolve().parent / "qml" / "time.patch.qml"
+# 注意：那三个功能的补丁资源（host_patch/、qml/*.patch.qml）已经不随插件分发，
+# 它们由功能 payload 自带。这里只留主程序内的目标路径常量（见上）。
 _NO_DIALOG_MARK = "NO_DIALOG_ORIG"
 
 _OVERLAY_MARKER = "overlayEditingId"
@@ -213,8 +211,15 @@ _TIMER_BLOCK = (
     "    }\n"
 )
 
-_CALCY_OLD = "y = preferences.widgets_offset_y"
-_CALCY_NEW = "y = (displayTop >= 0 ? displayTop : preferences.widgets_offset_y)"
+# 展示高度：顶部三种停靠都要认 displayTop。锚点必须唯一 ——
+# _apply 遇到「锚点出现多次」会整条跳过；旧写法 "y = preferences.widgets_offset_y"
+# 在容器文件里出现两次，所以这条补丁从没生效过（displayTop 从没被用上）。
+# _read() 会把宿主文件归一化成 LF，所以锚点里只能用 \n（别写 CRLF）。
+_CALCY_TOP_LR_OLD = "                y = preferences.widgets_offset_y\n                // 左/右不受 hide 影响"
+_CALCY_TOP_LR_NEW = "                y = (displayTop >= 0 ? displayTop : preferences.widgets_offset_y)\n                // 左/右不受 hide 影响"
+_CALCY_TOP_CENTER_OLD = "                y = preferences.widgets_offset_y\n                if (hide) y = -height + hideMargin  // 仅 center 生效"
+_CALCY_TOP_CENTER_NEW = "                y = (displayTop >= 0 ? displayTop : preferences.widgets_offset_y)\n                if (hide) y = -height + hideMargin  // 仅 center 生效"
+# （旧的 _CALCY_NEW 已并入上面两条唯一锚点）
 _SIGNAL_ANCHOR = "    signal contentGeometryChanged()\n"
 
 
@@ -459,122 +464,105 @@ _WLOADER_OPS = [
 ]
 
 
+# ── 「组件增强」功能用的锚点组 ──────────────────────────────
+# 小组件高度/深度 + 特定课程不隐藏 + 组件设置页的 backendObj 注入。
+# 这几项原本由插件本体无条件打进主程序（看起来像"自带功能"），现在归到可安装的
+# 功能 kryon.extended_settings 名下 —— 卸载后是真的从主程序里消失。
+_EXTENDED_CONTAINER_OPS = [
+    (_HIDE_MARGIN_OLD, _HIDE_MARGIN_NEW),
+    (_SIGNAL_ANCHOR, _TIMER_BLOCK + _SIGNAL_ANCHOR),
+    (_CALCY_TOP_LR_OLD, _CALCY_TOP_LR_NEW),
+    (_CALCY_TOP_CENTER_OLD, _CALCY_TOP_CENTER_NEW),
+] + _CONTAINER_MISC_OPS
+
+# 旧「小组件高度」插件（com.kryon.widgets-high）遗留的配置 key 与 Timer id 改名。
+# 单独一组：只有那个老插件打过补丁的文件里才有这些锚点，别的情况下不该去试，
+# 否则每次安装都会白报一条「锚点未找到」。
+_EXTENDED_LEGACY_OPS = [
+    ('configs["' + OLD_HIGH_KEY + '"]', 'configs["' + NEW_CFG_KEY + '"]'),
+    (OLD_TIMER_ID, NEW_TIMER_ID),
+]
+
+# 高度补丁的落地标记（_HIDE_MARGIN_NEW 里注入的字段名）
+_HEIGHT_MARKER = "hideDepthOverride"
+
+
+# 供功能 payload 复用的补丁锚点组。
+# 单一真相留在这里：payload 只声明要用哪一组，不再自己复制一遍 QML 字符串，
+# 否则主程序改版时两边会各改各的、逐渐不一致。
+PUBLIC_GROUPS = {
+    "overlay_container": _CONTAINER_OVERLAY_OPS,
+    "overlay_wloader": _WLOADER_OPS,
+    "container_misc": _CONTAINER_MISC_OPS,
+    "extended_container": _EXTENDED_CONTAINER_OPS,
+    "extended_legacy": _EXTENDED_LEGACY_OPS,
+}
+
+
 # ── 对外接口 ────────────────────────────────────────────────
 
-def install_all(logger, root=None):
-    """安装全部主程序补丁（幂等）。返回是否成功。"""
-    if root is None:
-        root = find_app_root()
-    if root is None:
-        logger.warning("[more_settings] 未找到主程序目录，跳过集成")
-        return False
+# ── 补丁落地情况 ────────────────────────────────────────────
+# 判定「某个功能需要的补丁到底有没有进主程序」。每项 (主程序内相对路径, 判据)：
+#     字符串              该文件里应出现的标记
+#     None                只要该文件存在就算已装入
+#     _DIFF_FROM_BACKUP   与官方原版备份不同（用于插件自己的核心补丁 ——
+#                         它们没有统一标记，比对原版最可靠）
+_DIFF_FROM_BACKUP = "<differs-from-official-backup>"
+
+FEATURE_PATCH_SPECS = {
+    # 插件本体的核心补丁：小组件高度/深度 + 组件设置页 backendObj 注入
+    "kryon.extended_settings": [(_CONTAINER_REL, _HEIGHT_MARKER)],
+    "kryon.overlay": [
+        (_CONTAINER_REL, _OVERLAY_MARKER),
+        (_WLOADER_REL, "overlayListMode"),
+        (_DIALOG_REL, None),
+    ],
+    "kryon.time_enhance": [(_TIME_REL, _TIME_MARK)],
+    "kryon.countdown_anim": [(_COUNTDOWN_REL, _COUNTDOWN_MARK)],
+}
+
+
+def patch_status(root, feature_id):
+    """某功能所需补丁的落地情况。
+
+    返回 [{"file": 相对路径, "applied": bool, "reason": 说明}]。
+    界面「组件安装后显示所需补丁的安装状态」靠它；安装算不算成功也以它为准
+    （全 True 才算），这样「装了但没注入」不会被当成成功。
+    """
     root = Path(root)
-    container = root / _CONTAINER_REL
-    wloader = root / _WLOADER_REL
-    dialog = root / _DIALOG_REL
     backup_dir = root / _BACKUP_ROOT / _BACKUP_SUB
-
-    if not container.is_file() or not wloader.is_file():
-        logger.error(f"[more_settings] 目录不是有效的 ClassWidgets 主程序: {root}")
-        return False
-
-    # 首次安装时统一备份（保留官方原版；已有备份不覆盖）
-    first_run = not backup_dir.is_dir()
-    if first_run:
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        _backup_file(container, backup_dir / "WidgetsContainer.qml.orig")
-        _backup_file(wloader, backup_dir / "WidgetLoader.qml.orig")
-        _record_dialog_backup(backup_dir, dialog, dialog.is_file())
-
-    # 1) 小组件高度补丁（WidgetsContainer.qml）
-    # 2) 堆叠补丁（WidgetsContainer.qml + WidgetLoader.qml + dialog）
-    # 3) 组件动画开关补丁
-    # 全部先改内存、自检通过后再落盘；任一步失败立即回滚，保证主程序始终可用。
-    try:
-        c_text, c_crlf = _read(container)
-        c_text = _apply_height(c_text)
-        c_text = _apply(c_text, _CONTAINER_MISC_OPS, "WidgetsContainer.qml", logger)
-        c_text = _apply_group(c_text, _CONTAINER_OVERLAY_OPS, "WidgetsContainer.qml", logger)
-
-        # overlay 引用了对话框就必须保证组件文件存在，否则回滚
-        if "AddOverlayMemberDialog" in c_text and not _DIALOG_SRC.is_file():
-            raise RuntimeError("缺少 AddOverlayMemberDialog.qml 资源文件")
-        _assert_qml_consistent(c_text, "WidgetsContainer.qml")
-
-        w_text, w_crlf = _read(wloader)
-        w_text = _apply(w_text, _WLOADER_OPS, "WidgetLoader.qml", logger)
-        _assert_qml_consistent(w_text, "WidgetLoader.qml")
-
-        _write(container, c_text, c_crlf)
-        _write(wloader, w_text, w_crlf)
-
-        # 插件专有对话框：官方原本没有才注入（官方已有则保留官方版本，避免破坏）
-        if "AddOverlayMemberDialog" in c_text:
-            dialog.parent.mkdir(parents=True, exist_ok=True)
-            if not dialog.is_file():
-                shutil.copy2(_DIALOG_SRC, dialog)
+    out = []
+    for rel, check in FEATURE_PATCH_SPECS.get(str(feature_id), []):
+        p = root / rel
+        item = {"file": rel.as_posix(), "applied": False, "reason": ""}
+        if not p.is_file():
+            item["reason"] = "文件不存在"
+        elif check is None:
+            item["applied"] = True
+            item["reason"] = "已装入主程序"
+        elif check is _DIFF_FROM_BACKUP:
+            orig = backup_dir / f"{p.name}.orig"
+            if not orig.is_file():
+                item["reason"] = "没有官方原版备份，无法判定"
             else:
-                logger.info("[more_settings] 官方已有 AddOverlayMemberDialog.qml，保留官方版本")
-
-        # 组件动画开关补丁（整体替换；失败同样回滚）
-        _install_qml_replace(logger, root / _COUNTDOWN_REL, _COUNTDOWN_PATCH,
-                             _COUNTDOWN_MARK, [_COUNTDOWN_OLD_MARK],
-                             backup_dir / "eventCountdown.qml.orig", "事件倒计时")
-        _install_qml_replace(logger, root / _TIME_REL, _TIME_PATCH,
-                             _TIME_MARK, [],
-                             backup_dir / "Time.qml.orig", "时间")
-    except Exception as e:
-        restore_all(logger)
-        logger.error(f"[more_settings] 集成补丁失败，已还原: {e}")
-        return False
-
-    logger.info("[more_settings] 主程序集成补丁已安装")
-    return True
-
-
-def _apply_height(text):
-    """应用小组件高度补丁（幂等，并接管旧 com.kryon.widgets-high 补丁）。"""
-    # 接管旧插件的同步 Timer：改读新配置 key + 重命名 id
-    if OLD_HIGH_KEY in text:
-        text = text.replace('configs["' + OLD_HIGH_KEY + '"]', 'configs["' + NEW_CFG_KEY + '"]')
-        text = text.replace(OLD_TIMER_ID, NEW_TIMER_ID)
-    # hideMargin 块：已含 hideDepthOverride 则视为已装，否则替换官方块
-    if "hideDepthOverride" not in text:
-        if _HIDE_MARGIN_OLD not in text:
-            # 可能是其它变体（含 floatingMode 注释等），保守跳过，避免破坏文件
-            pass
+                item["applied"] = orig.read_bytes() != p.read_bytes()
+                item["reason"] = "已注入" if item["applied"] else "未注入"
         else:
-            text = text.replace(_HIDE_MARGIN_OLD, _HIDE_MARGIN_NEW, 1)
-    # 同步 Timer：新 id 已存在则跳过，否则插入
-    if NEW_TIMER_ID not in text:
-        if _SIGNAL_ANCHOR in text:
-            text = text.replace(_SIGNAL_ANCHOR, _TIMER_BLOCK + _SIGNAL_ANCHOR, 1)
-        else:
-            text = _TIMER_BLOCK + text
-    # calcY：接管展示高度
-    if "displayTop >= 0" not in text:
-        text = text.replace(_CALCY_OLD, _CALCY_NEW)
-    return text
+            try:
+                text, _ = _read(p)
+                item["applied"] = check in text
+                item["reason"] = "已注入" if item["applied"] else "未注入"
+            except Exception as e:
+                item["reason"] = f"读取失败: {e}"
+        out.append(item)
+    return out
 
 
-def _install_qml_replace(logger, target, patch_src, our_mark, old_marks, backup, tag):
-    """整体替换单个内置组件 QML（幂等，可逆）。"""
-    if not target.is_file() or not patch_src.is_file():
-        return
-    try:
-        text, crlf = _read(target)
-        if our_mark in text:
-            return
-        patch_text, patch_crlf = _read(patch_src)
-        # 替换前自检补丁本身完整，避免把坏文件写进主程序（失败会向上抛，触发整体回滚）
-        _assert_qml_consistent(patch_text, f"{tag}补丁")
-        # 备份（首次；被旧插件补丁过时备份的是当前文件，仍可还原）
-        if not backup.is_file():
-            _backup_file(target, backup)
-        _write(target, patch_text, patch_crlf)
-        logger.info(f"[more_settings] 已为{tag}组件应用动画开关补丁")
-    except OSError as e:
-        logger.error(f"[more_settings] 应用{tag}补丁失败: {e}")
+# 本体的核心补丁已并入「组件增强」功能（kryon.extended_settings）：
+# 高度/深度、排除科目、组件设置页 backendObj 注入都由那个 payload 提供
+# （见 More_Settings-Features/features_src/kryon.extended_settings/ 与 PUBLIC_GROUPS，
+#   锚点常量仍在本文件，payload 通过 host.ops(...) 取用，不复制）。
+# 这样卸载该功能时补丁是真的撤掉，而不是留在主程序里。
 
 
 def restore_all(logger, root=None):
