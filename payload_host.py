@@ -29,6 +29,8 @@ _BACKUP_SUB = "more_settings"
 _HOST_FILES = {
     "container": "_CONTAINER_REL",
     "wloader": "_WLOADER_REL",
+    "layout": "_LAYOUT_REL",
+    "delegate": "_DELEGATE_REL",
     "dialog": "_DIALOG_REL",
     "countdown": "_COUNTDOWN_REL",
     "time": "_TIME_REL",

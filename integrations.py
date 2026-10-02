@@ -25,6 +25,11 @@ _DIALOG_REL = Path("src") / "qml" / "ClassWidgets" / "Components" / "dialogs" / 
 _EDITDLG_REL = Path("src") / "qml" / "ClassWidgets" / "Components" / "dialogs" / "EditOverlayDialog.qml"
 _COUNTDOWN_REL = Path("src") / "qml" / "widgets" / "eventCountdown.qml"
 _TIME_REL = Path("src") / "qml" / "widgets" / "Time.qml"
+# 新版主程序（2.0.0.dev20260928 起）把「每个组件」的界面代码拆到了这两个文件：
+# 布局在 WidgetsLayout.qml，单个组件的代理项（右键菜单、删除按钮、设置页调用）在 Delegate 里。
+_LAYOUT_REL = Path("src") / "qml" / "ClassWidgets" / "Components" / "WidgetsLayout.qml"
+_DELEGATE_REL = Path("src") / "qml" / "ClassWidgets" / "Components" / "WidgetsLayoutDelegate.qml"
+
 
 _BACKUP_ROOT = ".cwplugin_backups"
 _BACKUP_SUB = "more_settings"
@@ -167,7 +172,8 @@ def _assert_qml_consistent(text, tag):
 
 # ── 小组件高度补丁片段 ────────────────────────────────────────
 
-_HIDE_MARGIN_OLD = (
+# v1（旧主程序）：hideMargin 用 switch 写法
+_HIDE_MARGIN_V1 = (
     "    property real hideMargin: {\n"
     "        if (floatingMode) return 0  // 浮窗模式下完全移出窗口\n"
     "        switch (Qt.platform.os) {\n"
@@ -179,7 +185,7 @@ _HIDE_MARGIN_OLD = (
     "    } // 隐藏时保留的可点击空间"
 )
 
-_HIDE_MARGIN_NEW = (
+_HIDE_MARGIN_V1_NEW = (
     "    // patched by com.kryon.more_settings：展示高度 / 隐藏深度（Timer 实时同步）\n"
     "    property real displayTop: -1\n"
     "    property real hideDepthOverride: -1\n"
@@ -188,6 +194,25 @@ _HIDE_MARGIN_NEW = (
     "        var comHighDef = Qt.platform.os === \"osx\" ? 48 : 24\n"
     "        return hideDepthOverride >= 0 ? hideDepthOverride : comHighDef\n"
     "    } // 隐藏时保留的可点击空间"
+)
+
+# v2（2.0.0.dev20260928 起）：主程序把它改成了一行三元表达式
+_HIDE_MARGIN_V2 = (
+    "    property real hideMargin: {\n"
+    "        if (floatingMode) return 0\n"
+    "        return Qt.platform.os === \"osx\" ? 48 : 24\n"
+    "    }"
+)
+
+_HIDE_MARGIN_V2_NEW = (
+    "    // patched by com.kryon.more_settings：展示高度 / 隐藏深度（Timer 实时同步）\n"
+    "    property real displayTop: -1\n"
+    "    property real hideDepthOverride: -1\n"
+    "    property real hideMargin: {\n"
+    "        if (floatingMode) return 0\n"
+    "        var comHighDef = Qt.platform.os === \"osx\" ? 48 : 24\n"
+    "        return hideDepthOverride >= 0 ? hideDepthOverride : comHighDef\n"
+    "    }"
 )
 
 _TIMER_BLOCK = (
@@ -221,6 +246,18 @@ _CALCY_TOP_CENTER_OLD = "                y = preferences.widgets_offset_y\n     
 _CALCY_TOP_CENTER_NEW = "                y = (displayTop >= 0 ? displayTop : preferences.widgets_offset_y)\n                if (hide) y = -height + hideMargin  // 仅 center 生效"
 # （旧的 _CALCY_NEW 已并入上面两条唯一锚点）
 _SIGNAL_ANCHOR = "    signal contentGeometryChanged()\n"
+
+# v2 结构：位置改由 shownX / shownY / hiddenY / editY 这几个只读属性算出。
+# 顶部三种停靠要认 displayTop，就改 shownY 里顶部分支的返回值。
+# 锚点带上 case 行：单看 "return preferences.widgets_offset_y" 就有别的分支会撞车。
+_CALCY_TOP_V2_OLD = (
+    '        case "top_center":\n'
+    '            return preferences.widgets_offset_y'
+)
+_CALCY_TOP_V2_NEW = (
+    '        case "top_center":\n'
+    '            return (displayTop >= 0 ? displayTop : preferences.widgets_offset_y)'
+)
 
 
 # ── 堆叠插件补丁定义（原 com.overlay）─────────────────────────
@@ -432,6 +469,23 @@ _CONTAINER_MISC_OPS = [
                                 })"""),
 ]
 
+# v2：组件设置页的 setSource 调用搬到了代理项文件（WidgetsLayoutDelegate.qml），
+# 缩进也变了（20/24 空格），所以和 v1 那条不能共用锚点。
+_DELEGATE_MISC_OPS = [
+    ("""                    settingsDialog.setSource(model.settingsQml, {
+                        "settings": model.settings,
+                        "instanceId": model.instanceId,
+                        "widget_id": model.widget_id
+                    })""",
+     """                    settingsDialog.setSource(model.settingsQml, {
+                        "settings": model.settings,
+                        "instanceId": model.instanceId,
+                        "widget_id": model.widget_id,
+                        "backendObj": model.backendObj
+                    })"""),
+]
+
+
 _WLOADER_OPS = [
     ("""            if (item && item.hasOwnProperty('editMode')) {
                 item.editMode = widgetsContainer.editMode
@@ -468,12 +522,22 @@ _WLOADER_OPS = [
 # 小组件高度/深度 + 特定课程不隐藏 + 组件设置页的 backendObj 注入。
 # 这几项原本由插件本体无条件打进主程序（看起来像"自带功能"），现在归到可安装的
 # 功能 kryon.extended_settings 名下 —— 卸载后是真的从主程序里消失。
-_EXTENDED_CONTAINER_OPS = [
-    (_HIDE_MARGIN_OLD, _HIDE_MARGIN_NEW),
+# v1（旧主程序）整组。新版这些锚点已经不存在，由 payload 按「文件里有没有 shownY」
+# 判断要不要调，避免在 v2 上每次启动都白报一串「锚点未找到」。
+_EXTENDED_CONTAINER_V1_OPS = [
+    (_HIDE_MARGIN_V1, _HIDE_MARGIN_V1_NEW),
     (_SIGNAL_ANCHOR, _TIMER_BLOCK + _SIGNAL_ANCHOR),
     (_CALCY_TOP_LR_OLD, _CALCY_TOP_LR_NEW),
     (_CALCY_TOP_CENTER_OLD, _CALCY_TOP_CENTER_NEW),
 ] + _CONTAINER_MISC_OPS
+
+# v2（2.0.0.dev20260928 起）整组：容器文件里的展示高度 / 隐藏深度。
+# 「组件设置页 backendObj 注入」已不在这个文件里，见 _DELEGATE_MISC_OPS。
+_EXTENDED_CONTAINER_OPS = [
+    (_HIDE_MARGIN_V2, _HIDE_MARGIN_V2_NEW),
+    (_SIGNAL_ANCHOR, _TIMER_BLOCK + _SIGNAL_ANCHOR),
+    (_CALCY_TOP_V2_OLD, _CALCY_TOP_V2_NEW),
+]
 
 # 旧「小组件高度」插件（com.kryon.widgets-high）遗留的配置 key 与 Timer id 改名。
 # 单独一组：只有那个老插件打过补丁的文件里才有这些锚点，别的情况下不该去试，
@@ -495,6 +559,8 @@ PUBLIC_GROUPS = {
     "overlay_wloader": _WLOADER_OPS,
     "container_misc": _CONTAINER_MISC_OPS,
     "extended_container": _EXTENDED_CONTAINER_OPS,
+    "extended_container_v1": _EXTENDED_CONTAINER_V1_OPS,
+    "extended_delegate": _DELEGATE_MISC_OPS,
     "extended_legacy": _EXTENDED_LEGACY_OPS,
 }
 
@@ -511,7 +577,10 @@ _DIFF_FROM_BACKUP = "<differs-from-official-backup>"
 
 FEATURE_PATCH_SPECS = {
     # 插件本体的核心补丁：小组件高度/深度 + 组件设置页 backendObj 注入
-    "kryon.extended_settings": [(_CONTAINER_REL, _HEIGHT_MARKER)],
+    "kryon.extended_settings": [
+        (_CONTAINER_REL, _HEIGHT_MARKER),
+        (_DELEGATE_REL, '"backendObj": model.backendObj'),
+    ],
     "kryon.overlay": [
         (_CONTAINER_REL, _OVERLAY_MARKER),
         (_WLOADER_REL, "overlayListMode"),
