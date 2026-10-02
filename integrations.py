@@ -440,6 +440,147 @@ _CONTAINER_OVERLAY_OPS = [
     (_ADD_MEMBER_OLD, _ADD_MEMBER_NEW),
 ]
 
+# ── 新版主程序（2.0.0.dev20260928 起）的堆叠组件补丁组 ──────────────
+#
+# 新版把「每个组件」的界面代码拆成了两个文件：
+#   布局 WidgetsLayout.qml（根 id layoutRoot，实例化代理项）
+#   代理项 WidgetsLayoutDelegate.qml（根 id widgetContainer，右键菜单/删除按钮/摇晃）
+# 所以补丁也分两处落。跨组件文件不能用 id 直引对象，
+# 成员选择窗口改为按属性注入 —— 这正是主程序自己传 settingsDialog 的方式。
+#
+# 顺序要求：layout 组必须先生效，代理项才会引用到 host.overlayEditingId。
+
+_OVERLAY_LAYOUT_OPS = [
+    ("import ClassWidgets.Easing",
+     'import ClassWidgets.Easing\nimport "dialogs"'),
+    ("    property bool editMode: false",
+     "    property bool editMode: false\n"
+     "    // 堆叠插件集成：正在编辑的堆叠组件实例 id（按实例隔离）\n"
+     "    property string overlayEditingId: ''"),
+    ("""        delegate: WidgetsLayoutDelegate {
+            host: layoutRoot
+            settingsDialog: settingsDialogInstance
+        }""",
+     """        delegate: WidgetsLayoutDelegate {
+            host: layoutRoot
+            settingsDialog: settingsDialogInstance
+            // 堆叠插件集成：成员选择窗口按属性注入（跨组件文件不能用 id 直引）
+            overlayMemberDialog: overlayMemberDialogInstance
+        }"""),
+    ("""    WidgetSettingsDialog {
+        // 独立 id，避免与 delegate 的同名属性形成自引用
+        id: settingsDialogInstance
+    }""",
+     """    WidgetSettingsDialog {
+        // 独立 id，避免与 delegate 的同名属性形成自引用
+        id: settingsDialogInstance
+    }
+
+    // 堆叠插件集成：成员选择窗口
+    AddOverlayMemberDialog {
+        id: overlayMemberDialogInstance
+    }"""),
+]
+
+_OVERLAY_DELEGATE_OPS = [
+    ("    property bool initialized: false   // 入场只播一次，避免切主题重播",
+     "    property bool initialized: false   // 入场只播一次，避免切主题重播\n"
+     "    // 堆叠插件集成：本实例是不是堆叠组件、是不是正在编辑它的成员\n"
+     '    property bool isOverlay: model.typeId === "com.overlay"\n'
+     "    property bool overlayEditing: isOverlay && host.overlayEditingId === model.instanceId\n"
+     "    property var overlayMemberDialog: null"),
+    ("""    width: (naturalWidth + spacing) * growFactor
+    height: naturalHeight""",
+     """    width: (naturalWidth + spacing) * growFactor
+    height: naturalHeight + (widgetContainer.overlayEditing ? editRow.height + 10 : 0)"""),
+    ("    rotation: host.editMode ? shakeAngle : 0",
+     "    rotation: (host.editMode && !widgetContainer.overlayEditing) ? shakeAngle : 0"),
+    ("        function onVisibleChanged() { widgetContainer.syncNaturalSize() }",
+     """        function onVisibleChanged() { widgetContainer.syncNaturalSize() }
+
+        // 堆叠插件集成：把「正在编辑本组件」告诉组件实例。
+        // 必须先判 isOverlay —— 只有堆叠组件声明了 overlayListMode，
+        // 给别的组件赋值会抛 TypeError。
+        function onOverlayEditingChanged() {
+            if (widgetContainer.isOverlay && loader.item)
+                loader.item.overlayListMode = widgetContainer.overlayEditing
+        }"""),
+    ("""        MenuItem {
+            icon.name: "ic_fluent_delete_20_regular"
+            text: qsTr("Delete")""",
+     """        MenuItem {
+            // 堆叠插件集成：编辑其内部成员
+            visible: widgetContainer.isOverlay
+            icon.name: "ic_fluent_layers_20_regular"
+            text: qsTr("编辑成员组件")
+            onTriggered: {
+                widgetMenu.close()
+                host.overlayEditingId = model.instanceId
+            }
+        }
+        MenuItem {
+            icon.name: "ic_fluent_delete_20_regular"
+            text: qsTr("Delete")"""),
+    ("""    ToolButton {
+        id: deleteBtn""",
+     """    // 堆叠插件集成：成员编辑行（Add Member / Done）
+    RowLayout {
+        id: editRow
+        objectName: "editRow"
+        visible: widgetContainer.overlayEditing
+        anchors.top: loader.bottom
+        anchors.topMargin: 10
+        anchors.horizontalCenter: parent.horizontalCenter
+        width: implicitWidth
+        height: implicitHeight
+        spacing: 8
+
+        Button {
+            id: addOverlayMemberButton
+            icon.name: "ic_fluent_add_20_regular"
+            text: qsTr("Add Member")
+            onClicked: {
+                if (widgetContainer.overlayMemberDialog) {
+                    widgetContainer.overlayMemberDialog.overlayInstanceId = model.instanceId
+                    widgetContainer.overlayMemberDialog.open()
+                }
+            }
+        }
+
+        Button {
+            id: acceptOverlayButton
+            highlighted: true
+            icon.name: "ic_fluent_checkmark_20_regular"
+            text: qsTr("Done")
+            onClicked: host.overlayEditingId = ''
+        }
+    }
+
+    ToolButton {
+        id: deleteBtn"""),
+    ("""    TapHandler {
+        acceptedButtons: Qt.RightButton""",
+     """    TapHandler {
+        acceptedButtons: Qt.RightButton
+        // 堆叠插件集成：编辑成员时禁用（成员自己的右键交给 overlay 处理）
+        enabled: !widgetContainer.overlayEditing"""),
+    ("""    SequentialAnimation on shakeAngle {
+        running: host.editMode""",
+     """    SequentialAnimation on shakeAngle {
+        running: host.editMode && !widgetContainer.overlayEditing"""),
+]
+
+# 容器文件里与堆叠编辑互斥的两处可见性（用容器自己的 widgetsLayout 实例引用）
+_OVERLAY_CONTAINER_V2_OPS = [
+    ("""            visible: widgetsContainer.editMode
+            id: acceptButton""",
+     """            visible: widgetsContainer.editMode && widgetsLayout.overlayEditingId === ''
+            id: acceptButton"""),
+    ("""        visible: widgetsContainer.editMode || widgetsLayout.count === 0""",
+     """        visible: (widgetsContainer.editMode || widgetsLayout.count === 0)
+            && widgetsLayout.overlayEditingId === ''"""),
+]
+
 # 与 overlay 无关的修正：给组件设置页注入 backendObj（独立应用，不受 overlay 锚点影响）
 _CONTAINER_MISC_OPS = [
     (["""                                settingsDialog.setSource(model.settingsQml, {
@@ -557,6 +698,9 @@ _HEIGHT_MARKER = "hideDepthOverride"
 PUBLIC_GROUPS = {
     "overlay_container": _CONTAINER_OVERLAY_OPS,
     "overlay_wloader": _WLOADER_OPS,
+    "overlay_layout": _OVERLAY_LAYOUT_OPS,
+    "overlay_delegate": _OVERLAY_DELEGATE_OPS,
+    "overlay_container_v2": _OVERLAY_CONTAINER_V2_OPS,
     "container_misc": _CONTAINER_MISC_OPS,
     "extended_container": _EXTENDED_CONTAINER_OPS,
     "extended_container_v1": _EXTENDED_CONTAINER_V1_OPS,
@@ -585,6 +729,8 @@ FEATURE_PATCH_SPECS = {
         (_CONTAINER_REL, _OVERLAY_MARKER),
         (_WLOADER_REL, "overlayListMode"),
         (_DIALOG_REL, None),
+        (_LAYOUT_REL, "overlayEditingId"),
+        (_DELEGATE_REL, "overlayMemberDialog"),
     ],
     "kryon.time_enhance": [(_TIME_REL, _TIME_MARK)],
     "kryon.countdown_anim": [(_COUNTDOWN_REL, _COUNTDOWN_MARK)],
