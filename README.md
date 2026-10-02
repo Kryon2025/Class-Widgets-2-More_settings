@@ -1,15 +1,23 @@
 <div align="center">
 
+<img src="icon.png" height="120" alt="Kryon 的扩展设置">
 <h1>
   Kryon的扩展设置
 </h1>
 
+[![版本](https://img.shields.io/badge/%E7%89%88%E6%9C%AC-1.3.4-5A9BFF?style=for-the-badge)](https://github.com/Kryon2025/Class-Widgets-2-More_settings/releases)
+[![星标](https://img.shields.io/github/stars/Kryon2025/Class-Widgets-2-More_settings?style=for-the-badge&color=orange&label=%E6%98%9F%E6%A0%87)](https://github.com/Kryon2025/Class-Widgets-2-More_settings)
+[![开源许可](https://img.shields.io/github/license/Kryon2025/Class-Widgets-2-More_settings?style=for-the-badge&label=%E5%BC%80%E6%BA%90%E8%AE%B8%E5%8F%AF%E8%AF%81)](https://github.com/Kryon2025/Class-Widgets-2-More_settings/blob/main/LICENSE)
+[![下载量](https://img.shields.io/github/downloads/Kryon2025/Class-Widgets-2-More_settings/total.svg?label=%E4%B8%8B%E8%BD%BD%E9%87%8F&color=green&style=for-the-badge)](https://github.com/Kryon2025/Class-Widgets-2-More_settings/releases)
+
 </div>
+
+> [!NOTE]
+> 当前版本 **1.3.4**，要求 Class Widgets 2 的插件 API `>=0.6.0`。
+> 在 [插件广场](https://plaza.cw.rinlit.cn/plugins/com.kryon.more_settings) 可以一键安装/更新，也可以在 Release 页下载 `.cwplugin` 手动导入。
 
 > [!TIP]
 > 很抱歉在之前的版本中对大家的影响，现已修复问题，请放心使用！
-
-</div>
 
 > [!CAUTION]
 > 请注意本插件对于最新版本的支持。如果补丁未注入，请卸载本插件！
