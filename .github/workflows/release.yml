@@ -30,30 +30,16 @@ jobs:
         run: |
           pip install packaging
 
-      # 顺序很重要：先打插件本体，此时 dist/ 还不存在。
-      # 打包器没有排除选项（只有 -o / -f），如果先生成 payload，
-      # dist/ 就会被一起卷进 .cwplugin 里。
+      # 先打插件本体：此时 dist/ 还不存在，不会被一起卷进 .cwplugin 里
+      # （打包器没有排除选项，只有 -o / -f）。
       - name: Build plugin packages
         run: |
           cw-plugin-pack
           cw-plugin-pack --format zip
 
-      # 校验已提交的 manifest.json 与本次构建产物是否一致。
-      # 不一致说明改完源码忘了在本地跑 make_payloads.py 并提交 manifest.json ——
-      # 这时若继续发布，用户会下载到 sha256 对不上的包，所以这里直接失败。
-      - name: Verify payload manifest is up to date
-        run: |
-          python tools/make_payloads.py --out-dir dist \
-            --tag "${{ github.ref_name }}" --check
-
-      # 构建各功能的 payload 文件（同时刷新工作区里的 manifest.json，仅用于核对）。
-      # 新条目默认 tested=false；确认可用后加 --tested 再发一版，
-      # 才会被「已适配且已测试」的自动选择逻辑挑中。
-      - name: Build feature payloads
-        run: |
-          python tools/make_payloads.py --out-dir dist \
-            --tag "${{ github.ref_name }}" --tested
-
+      # 功能包（payload）不在这个仓库里，也不由本流程发布：
+      # 它们住在 Kryon2025/More_Settings-Features（features_src/ + payloads/ + manifest.json），
+      # 由 manifest.json 里的仓库直链分发，不进插件广场。这里只发加载器本体。
       - name: Show release artifacts
         run: |
           ls -lh *.cwplugin *.zip 2>/dev/null || true
@@ -83,5 +69,4 @@ jobs:
           files: |
             *.cwplugin
             *.zip
-            dist/*.cwpayload
           body_path: dist/RELEASE_NOTES.md
