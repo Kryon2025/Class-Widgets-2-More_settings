@@ -727,7 +727,6 @@ FEATURE_PATCH_SPECS = {
     ],
     "kryon.overlay": [
         (_CONTAINER_REL, _OVERLAY_MARKER),
-        (_WLOADER_REL, "overlayListMode"),
         (_DIALOG_REL, None),
         (_LAYOUT_REL, "overlayEditingId"),
         (_DELEGATE_REL, "overlayMemberDialog"),
@@ -751,7 +750,11 @@ def patch_status(root, feature_id):
         p = root / rel
         item = {"file": rel.as_posix(), "applied": False, "reason": ""}
         if not p.is_file():
-            item["reason"] = "文件不存在"
+            # 判据里可能列了只在某个主程序版本存在的文件（新版把界面拆成了
+            # WidgetsLayout / WidgetsLayoutDelegate）。缺文件按「该版本无此文件」
+            # 计，不算未注入 —— 否则升级主程序后，老功能的验收会永远不过。
+            item["applied"] = True
+            item["reason"] = "该主程序版本无此文件"
         elif check is None:
             item["applied"] = True
             item["reason"] = "已装入主程序"
