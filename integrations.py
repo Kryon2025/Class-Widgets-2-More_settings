@@ -93,6 +93,22 @@ def _read(path):
     return text, crlf
 
 
+def _op_applied(text, old, new):
+    """判断某个 op 是否已应用过 —— 用【稳定标记】而不是整块 new。
+
+    new 通常把原锚点整段带上，且只要改一处文案/注释，整块文本就变了，
+    于是被误判为"未应用"而重复注入（曾导致右键菜单出现两个「编辑成员组件」）。
+    这里取 new 中【出现、而 old 中不出现】的最长一行作为标记：它只属于"新增
+    的那部分"，对注释/文案微调不敏感。
+    """
+    olds = old if isinstance(old, (list, tuple)) else [old]
+    joined_old = "\n".join(olds)
+    cands = [ln.strip() for ln in new.splitlines()
+             if ln.strip() and ln.strip() not in joined_old]
+    marker = max(cands, key=len) if cands else new
+    return marker in text
+
+
 def _write(path, text, crlf):
     data = text.encode("utf-8")
     if crlf:
@@ -107,7 +123,7 @@ def _apply(text, ops, tag, logger=None):
     以兼容不同主程序版本的差异（避免单点失配导致整批补丁失效）。
     """
     for old, new in ops:
-        if new in text:
+        if _op_applied(text, old, new):
             continue
         candidates = old if isinstance(old, (list, tuple)) else [old]
         hit = None
@@ -141,7 +157,7 @@ def _apply_group(text, ops, tag, logger=None):
     """
     original = text
     for old, new in ops:
-        if new in text:
+        if _op_applied(text, old, new):
             continue
         candidates = old if isinstance(old, (list, tuple)) else [old]
         hit = None
