@@ -476,13 +476,17 @@ _OVERLAY_LAYOUT_OPS = [
         id: settingsDialogInstance
     }
 
-    // 堆叠插件集成：成员选择窗口
-    AddOverlayMemberDialog {
+    // 堆叠插件集成：成员选择窗口（按需加载，窗口缺失/不兼容也不影响主界面启动）
+    Loader {
         id: overlayMemberDialogInstance
+        source: "dialogs/AddOverlayMemberDialog.qml"
+        active: false
     }"""),
 ]
 
 _OVERLAY_DELEGATE_OPS = [
+    ("import QtQuick.Controls\nimport RinUI",
+     "import QtQuick.Controls\nimport QtQuick.Layouts\nimport RinUI"),
     ("    property bool initialized: false   // 入场只播一次，避免切主题重播",
      "    property bool initialized: false   // 入场只播一次，避免切主题重播\n"
      "    // 堆叠插件集成：本实例是不是堆叠组件、是不是正在编辑它的成员\n"
@@ -495,16 +499,20 @@ _OVERLAY_DELEGATE_OPS = [
     height: naturalHeight + (widgetContainer.overlayEditing ? editRow.height + 10 : 0)"""),
     ("    rotation: host.editMode ? shakeAngle : 0",
      "    rotation: (host.editMode && !widgetContainer.overlayEditing) ? shakeAngle : 0"),
-    ("        function onVisibleChanged() { widgetContainer.syncNaturalSize() }",
+    ("""        function onVisibleChanged() { widgetContainer.syncNaturalSize() }
+        function onWidthChanged()   { widgetContainer.syncNaturalSize() }
+        function onHeightChanged()  { widgetContainer.syncNaturalSize() }
+    }""",
      """        function onVisibleChanged() { widgetContainer.syncNaturalSize() }
+        function onWidthChanged()   { widgetContainer.syncNaturalSize() }
+        function onHeightChanged()  { widgetContainer.syncNaturalSize() }
+    }
 
-        // 堆叠插件集成：把「正在编辑本组件」告诉组件实例。
-        // 必须先判 isOverlay —— 只有堆叠组件声明了 overlayListMode，
-        // 给别的组件赋值会抛 TypeError。
-        function onOverlayEditingChanged() {
-            if (widgetContainer.isOverlay && loader.item)
-                loader.item.overlayListMode = widgetContainer.overlayEditing
-        }"""),
+    // 堆叠插件集成：编辑状态变化时，把 overlayListMode 通知给组件实例
+    onOverlayEditingChanged: {
+        if (widgetContainer.isOverlay && loader.item)
+            loader.item.overlayListMode = widgetContainer.overlayEditing
+    }"""),
     ("""        MenuItem {
             icon.name: "ic_fluent_delete_20_regular"
             text: qsTr("Delete")""",
@@ -515,6 +523,7 @@ _OVERLAY_DELEGATE_OPS = [
             text: qsTr("编辑成员组件")
             onTriggered: {
                 widgetMenu.close()
+                host.editRequested()
                 host.overlayEditingId = model.instanceId
             }
         }
@@ -540,9 +549,13 @@ _OVERLAY_DELEGATE_OPS = [
             icon.name: "ic_fluent_add_20_regular"
             text: qsTr("Add Member")
             onClicked: {
-                if (widgetContainer.overlayMemberDialog) {
-                    widgetContainer.overlayMemberDialog.overlayInstanceId = model.instanceId
-                    widgetContainer.overlayMemberDialog.open()
+                var dlg = widgetContainer.overlayMemberDialog
+                if (dlg) {
+                    dlg.active = true
+                    if (dlg.item) {
+                        dlg.item.overlayInstanceId = model.instanceId
+                        dlg.item.open()
+                    }
                 }
             }
         }
@@ -552,7 +565,7 @@ _OVERLAY_DELEGATE_OPS = [
             highlighted: true
             icon.name: "ic_fluent_checkmark_20_regular"
             text: qsTr("Done")
-            onClicked: host.overlayEditingId = ''
+            onClicked: { host.editMode = false; host.overlayEditingId = '' }
         }
     }
 
@@ -636,7 +649,7 @@ _WLOADER_OPS = [
                 item.editMode = widgetsContainer.editMode
             }
             if (item && item.hasOwnProperty('overlayListMode')) {
-                item.overlayListMode = widgetsContainer.overlayEditingId === model.instanceId
+                item.overlayListMode = host.overlayEditingId === model.instanceId
             }
             anim.start()"""),
     ("""        function onEditModeChanged() {
@@ -652,7 +665,7 @@ _WLOADER_OPS = [
         }
         function onOverlayEditingIdChanged() {
             if (loader.item && loader.item.hasOwnProperty('overlayListMode')) {
-                loader.item.overlayListMode = widgetsContainer.overlayEditingId === model.instanceId
+                loader.item.overlayListMode = host.overlayEditingId === model.instanceId
             }
         }
     }"""),
