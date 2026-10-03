@@ -493,10 +493,6 @@ _OVERLAY_DELEGATE_OPS = [
      '    property bool isOverlay: model.typeId === "com.overlay"\n'
      "    property bool overlayEditing: isOverlay && host.overlayEditingId === model.instanceId\n"
      "    property var overlayMemberDialog: null"),
-    ("""    width: (naturalWidth + spacing) * growFactor
-    height: naturalHeight""",
-     """    width: (naturalWidth + spacing) * growFactor
-    height: naturalHeight + (widgetContainer.overlayEditing ? editRow.height + 10 : 0)"""),
     ("    rotation: host.editMode ? shakeAngle : 0",
      "    rotation: (host.editMode && !widgetContainer.overlayEditing) ? shakeAngle : 0"),
     ("""        function onVisibleChanged() { widgetContainer.syncNaturalSize() }
