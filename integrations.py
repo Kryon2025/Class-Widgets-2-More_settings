@@ -457,16 +457,12 @@ _OVERLAY_LAYOUT_OPS = [
      "    property bool editMode: false\n"
      "    // 堆叠插件集成：正在编辑的堆叠组件实例 id（按实例隔离）\n"
      "    property string overlayEditingId: ''"),
-    ("""        delegate: WidgetsLayoutDelegate {
-            host: layoutRoot
-            settingsDialog: settingsDialogInstance
-        }""",
-     """        delegate: WidgetsLayoutDelegate {
-            host: layoutRoot
-            settingsDialog: settingsDialogInstance
+    ("""            host: layoutRoot
+            settingsDialog: settingsDialogInstance""",
+     """            host: layoutRoot
             // 堆叠插件集成：成员选择窗口按属性注入（跨组件文件不能用 id 直引）
             overlayMemberDialog: overlayMemberDialogInstance
-        }"""),
+            settingsDialog: settingsDialogInstance"""),
     ("""    WidgetSettingsDialog {
         // 独立 id，避免与 delegate 的同名属性形成自引用
         id: settingsDialogInstance
