@@ -637,34 +637,32 @@ _DELEGATE_MISC_OPS = [
 
 
 _WLOADER_OPS = [
-    ("""            if (item && item.hasOwnProperty('editMode')) {
-                item.editMode = widgetsContainer.editMode
+    # v2（2.0.0.dev20260928 起）：WidgetLoader.qml 里 editMode 是属性、onEditModeChanged 是信号，
+    # 且没有 host/widgetsContainer/anim.start()。给加载器补一个 overlayEditingId 属性 + 处理器，
+    # 并在 Ready 时把 overlayListMode 传给组件本体。锚点整段带后续行，保证重复应用不叠加。
+    ("""    property bool editMode: false
+
+    signal contentLoading()""",
+     """    property bool editMode: false
+    property string overlayEditingId: ""
+
+    onOverlayEditingIdChanged: {
+        if (loader.item && loader.item.hasOwnProperty("overlayListMode"))
+            loader.item.overlayListMode = overlayEditingId === model.instanceId
+    }
+
+    signal contentLoading()"""),
+    ("""            if (item && item.hasOwnProperty("editMode")) {
+                item.editMode = editMode
             }
-            anim.start()""",
-     """            if (item && item.hasOwnProperty('editMode')) {
-                item.editMode = widgetsContainer.editMode
+            contentLoaded()""",
+     """            if (item && item.hasOwnProperty("editMode")) {
+                item.editMode = editMode
             }
-            if (item && item.hasOwnProperty('overlayListMode')) {
-                item.overlayListMode = host.overlayEditingId === model.instanceId
+            if (item && item.hasOwnProperty("overlayListMode")) {
+                item.overlayListMode = overlayEditingId === model.instanceId
             }
-            anim.start()"""),
-    ("""        function onEditModeChanged() {
-            if (loader.item && loader.item.hasOwnProperty('editMode')) {
-                loader.item.editMode = widgetsContainer.editMode
-            }
-        }
-    }""",
-     """        function onEditModeChanged() {
-            if (loader.item && loader.item.hasOwnProperty('editMode')) {
-                loader.item.editMode = widgetsContainer.editMode
-            }
-        }
-        function onOverlayEditingIdChanged() {
-            if (loader.item && loader.item.hasOwnProperty('overlayListMode')) {
-                loader.item.overlayListMode = host.overlayEditingId === model.instanceId
-            }
-        }
-    }"""),
+            contentLoaded()"""),
 ]
 
 
