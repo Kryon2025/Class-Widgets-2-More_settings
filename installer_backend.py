@@ -342,8 +342,11 @@ class InstallerBackend(QObject):
                 if only_tested and not v.get("tested"):
                     continue
                 if self._cw2_version:
-                    if not cw_in_range(self._cw2_version, feat.get("cw2_min"),
-                                       feat.get("cw2_max")):
+                    # 用【这个版本自己的】适配区间判定；没写才回退到功能级。
+                    # 这样一个功能的历史版本才能各自适配不同的主程序版本。
+                    if not cw_in_range(self._cw2_version,
+                                       v.get("cw2_min") or feat.get("cw2_min"),
+                                       v.get("cw2_max") or feat.get("cw2_max")):
                         continue
                 else:
                     # 拿不到主程序版本：不拒绝，但只认"已测试"的
