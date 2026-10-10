@@ -521,7 +521,31 @@ class Plugin(CW2Plugin):
 
     @Slot(float)
     def setDisplayHeight(self, value: float) -> None:
-        self._config.display_height = float(value)
+        """把「展示高度」直接落到主程序官方的 Y 轴偏移设置项。
+
+        以前写的是插件自己的 display_height，补丁再用
+        `y = (displayTop >= 0 ? displayTop : preferences.widgets_offset_y)`
+        把它盖到官方值上面 —— 于是「这个滑块」与
+        「小组件布局-显示与位置-Y轴偏移」是两个互不知情的数，改了一个另一个不动。
+
+        现在只改官方那一个设置项，并把 display_height 归 -1，让补丁的三元
+        表达式回落到同一个值：调这个滑块就是调那一项，两处永远一致。
+        """
+        px = max(0.0, float(value))
+        try:
+            configs = self.api.globalconfig.configs
+            configs.preferences.widgets_offset_y = px
+        except Exception as e:                                   # noqa: BLE001
+            logger.warning("[more_settings] 写入官方 Y 轴偏移失败: {}", e)
+            return
+        try:
+            self.api.globalconfig.save()
+        except Exception as e:                                   # noqa: BLE001
+            logger.debug("[more_settings] 保存主程序配置失败（交由主程序自行保存）: {}", e)
+        # 插件自己的展示高度归 -1：补丁回落到官方值，避免两套值并存
+        self._config.display_height = -1
+        self._save_config()
+        self.configChanged.emit()
         self._save_config()
         self.configChanged.emit()
 
