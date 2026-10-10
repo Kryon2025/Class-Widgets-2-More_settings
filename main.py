@@ -591,15 +591,23 @@ class Plugin(CW2Plugin):
             if not self._config.hide_excluded_enabled:
                 return
             if status not in ("class", "activity"):
+                logger.debug(
+                    "[more_settings] 特定科目不隐藏: 跳过 —— 状态不匹配 status={!r}（只认 class/activity）",
+                    status)
                 return
             subject = self._current_subject_name()
             if not subject:
+                logger.debug(
+                    "[more_settings] 特定科目不隐藏: 跳过 —— 取不到当前课表科目 status={!r}", status)
                 return
             try:
                 subjects = json.loads(self._config.hide_excluded_subjects or "[]")
             except Exception:
                 subjects = []
             if not isinstance(subjects, list) or subject not in subjects:
+                logger.debug(
+                    "[more_settings] 特定科目不隐藏: 跳过 —— 科目不在排除列表 subject={!r} 列表={}",
+                    subject, subjects)
                 return
             # 仅纠正官方"在课堂中隐藏"（auto hide）的效果
             configs = self.api.globalconfig.configs
