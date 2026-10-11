@@ -262,6 +262,7 @@ _TIMER_BLOCK = (
 _DO_NOT_HIDE_OLD = "    property bool hide: Configs.data.interactions.hide.state\n"
 
 _DO_NOT_HIDE_NEW = (
+    "    property bool hide: Configs.data.interactions.hide.state\n"
     "    // [patched by kryon.do_not_hide] 排除科目上课时不隐藏\n"
     "    //\n"
     "    // hide 保持宿主原语义，不动它：interactions.hide.state 在全库的唯一写入者\n"
