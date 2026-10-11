@@ -443,7 +443,6 @@ class Plugin(CW2Plugin):
 
         # 官方"在课堂中隐藏"的特定课程不隐藏（参考一代 excluded_lessons）
         try:
-            self.api.runtime.statusChanged.connect(self._on_status_changed)
             logger.info("[more_settings] 已连接日程状态信号")
         except Exception as e:
             logger.warning("[more_settings] 连接日程状态信号失败: {}", e)
@@ -465,10 +464,6 @@ class Plugin(CW2Plugin):
     def on_unload(self):
         super().on_unload()
         self._shutdown_payloads()
-        try:
-            self.api.runtime.statusChanged.disconnect(self._on_status_changed)
-        except Exception:
-            pass
         try:
             _restore_all(logger)
         except Exception as e:
@@ -554,95 +549,6 @@ class Plugin(CW2Plugin):
         self._config.hide_depth = float(value)
         self._save_config()
         self.configChanged.emit()
-
-    # ── 特定课程不隐藏（官方"在课堂中隐藏"的排除）──────────────
-
-    @Slot(result=dict)
-    def getExcludedLessonConfig(self) -> dict:
-        try:
-            subjects = json.loads(self._config.hide_excluded_subjects or "[]")
-            if not isinstance(subjects, list):
-                subjects = []
-        except Exception:
-            subjects = []
-        return {
-            "enabled": self._config.hide_excluded_enabled,
-            "subjects": [str(s) for s in subjects],
-        }
-
-    @Slot(bool, list)
-    def setExcludedLessonConfig(self, enabled: bool, subjects: list) -> None:
-        clean = []
-        for s in (subjects or []):
-            s = str(s).strip()
-            if s and s not in clean:
-                clean.append(s)
-        self._config.hide_excluded_enabled = bool(enabled)
-        self._config.hide_excluded_subjects = json.dumps(clean, ensure_ascii=False)
-        self._save_config()
-        self.configChanged.emit()
-
-
-    def _current_subject_name(self) -> str:
-        """取当前课表科目名。
-        主程序 runtime 暴露的是 currentSubject（驼峰，对象 {name,color}），
-        老代码读的 current_subject 并不存在，于是永远拿到空串 —— 功能表现为「完全没效果」。
-        两种写法都兼容，并兼容字符串形式。
-        """
-        try:
-            rt = getattr(self.api, "runtime", None)
-            if rt is None:
-                return ""
-            val = getattr(rt, "currentSubject", None)
-            if val is None:
-                val = getattr(rt, "current_subject", None)
-            if isinstance(val, str):
-                return val.strip()
-            if hasattr(val, "get"):
-                return str(val.get("name") or "").strip()
-            return str(getattr(val, "name", "") or "").strip()
-        except Exception:
-            return ""
-
-    def _on_status_changed(self, status: str) -> None:
-        """官方 AutoHideTask 会随日程状态隐藏/显示小组件；
-        延迟到事件循环下一轮执行，确保在官方处理完之后再纠正。"""
-        QTimer.singleShot(0, lambda: self._apply_excluded_lesson(status))
-
-    def _apply_excluded_lesson(self, status: str) -> None:
-        """仅在主程序"在课堂中隐藏"时生效：按当前课表科目（而非课程标题）判定。"""
-        try:
-            if not self._config.hide_excluded_enabled:
-                return
-            if status not in ("class", "activity"):
-                logger.debug(
-                    "[more_settings] 特定科目不隐藏: 跳过 —— 状态不匹配 status={!r}（只认 class/activity）",
-                    status)
-                return
-            subject = self._current_subject_name()
-            if not subject:
-                logger.debug(
-                    "[more_settings] 特定科目不隐藏: 跳过 —— 取不到当前课表科目 status={!r}", status)
-                return
-            try:
-                subjects = json.loads(self._config.hide_excluded_subjects or "[]")
-            except Exception:
-                subjects = []
-            if not isinstance(subjects, list) or subject not in subjects:
-                logger.debug(
-                    "[more_settings] 特定科目不隐藏: 跳过 —— 科目不在排除列表 subject={!r} 列表={}",
-                    subject, subjects)
-                return
-            # 仅纠正官方"在课堂中隐藏"（auto hide）的效果
-            configs = self.api.globalconfig.configs
-            action = str(configs.interactions.hide.action)
-            if action == "mini_mode":
-                configs.preferences.mini_mode = False
-            else:
-                configs.interactions.hide.state = False
-            logger.info("[more_settings] 特定科目不隐藏已生效: {}", subject)
-        except Exception as e:
-            logger.warning("[more_settings] 特定科目不隐藏处理失败: {}", e)
 
     def _save_config(self) -> None:
         try:

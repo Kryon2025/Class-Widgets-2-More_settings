@@ -252,6 +252,36 @@ _TIMER_BLOCK = (
     "    }\n"
 )
 
+# ── 特定课程不隐藏补丁片段 ──────────────────────────────────
+# 功能 kryon.do_not_hide 名下；只有该功能包被安装时才会应用。
+#
+# 挂在容器的 hide 属性上：它本来就是一条 QML 绑定
+# （Configs.data.interactions.hide.state），补丁让它再与一个纯 QML 判断取与。
+# 科目与状态都从宿主单例读，不需要插件后端、不需要 api、不需要写 Configs。
+# 锚点与「小组件高度」那组（hideMargin / displayTop / shownY）不重叠。
+_DO_NOT_HIDE_OLD = "    property bool hide: Configs.data.interactions.hide.state\n"
+
+_DO_NOT_HIDE_NEW = (
+    "    // [patched by kryon.do_not_hide] 排除科目上课时不隐藏\n"
+    "    property bool hide: Configs.data.interactions.hide.state && !doNotHideActive\n"
+    "    property bool doNotHideActive: {\n"
+    "        try {\n"
+    "            if (AppCentral.scheduleRuntime.currentStatus !== \"class\") return false\n"
+    "            var cfg = Configs.data.plugins.configs[\"com.kryon.more_settings\"]\n"
+    "            if (!cfg || cfg.hide_excluded_enabled !== true) return false\n"
+    "            var subs = cfg.hide_excluded_subjects\n"
+    "            subs = (typeof subs === \"string\") ? JSON.parse(subs || \"[]\") : (subs || [])\n"
+    "            var cur = (AppCentral.scheduleRuntime.currentSubject || {}).name || \"\"\n"
+    "            return cur !== \"\" && subs.indexOf(cur) >= 0\n"
+    "        } catch (e) { return false }\n"
+    "    }\n"
+)
+
+_DO_NOT_HIDE_OPS = [
+    (_DO_NOT_HIDE_OLD, _DO_NOT_HIDE_NEW),
+]
+
+
 # 展示高度：顶部三种停靠都要认 displayTop。锚点必须唯一 ——
 # _apply 遇到「锚点出现多次」会整条跳过；旧写法 "y = preferences.widgets_offset_y"
 # 在容器文件里出现两次，所以这条补丁从没生效过（displayTop 从没被用上）。
@@ -270,10 +300,12 @@ _CALCY_TOP_V2_OLD = (
     '        case "top_center":\n'
     '            return preferences.widgets_offset_y'
 )
-_CALCY_TOP_V2_NEW = (
-    '        case "top_center":\n'
-    '            return (displayTop >= 0 ? displayTop : preferences.widgets_offset_y)'
-)
+# 本补丁已停用（2026-02）：它让 top_center 停靠的 y 由 displayTop 覆盖，
+# 而官方隐藏/恢复走的是 visible —— 两者混用会让恢复后位置错位，
+# 表现为「隐藏后再显示不全」。
+# 「展示高度」现已改为直接写官方 preferences.widgets_offset_y，不再需要覆盖 y，
+# 所以把 NEW 设为与 OLD 相同，这条补丁等同空操作，y 完全交回官方表达式。
+_CALCY_TOP_V2_NEW = _CALCY_TOP_V2_OLD
 
 
 # ── 堆叠插件补丁定义（原 com.overlay）─────────────────────────
@@ -431,6 +463,8 @@ PUBLIC_GROUPS = {
     "extended_container_v1": _EXTENDED_CONTAINER_V1_OPS,
     "extended_delegate": _DELEGATE_MISC_OPS,
     "extended_legacy": _EXTENDED_LEGACY_OPS,
+    # 功能 kryon.do_not_hide 名下 —— 只有该功能包安装时才应用
+    "do_not_hide_ops": _DO_NOT_HIDE_OPS,
 }
 
 
