@@ -550,6 +550,35 @@ class Plugin(CW2Plugin):
         self._save_config()
         self.configChanged.emit()
 
+    # ── 特定课程不隐藏（由 kryon.do_not_hide 功能包的设置页调用）─────
+    # 功能包不能自己存这个配置：Configs.set 只接受点号路径，而插件 id 自带点；
+    # 写主程序 preferences 又会因不在 schema 里被拒。Slot 是唯一可靠通道。
+
+    @Slot(result=dict)
+    def getExcludedLessonConfig(self) -> dict:
+        subjects = []
+        try:
+            data = json.loads(self._config.hide_excluded_subjects or "[]")
+            if isinstance(data, list):
+                subjects = [str(x) for x in data]
+        except Exception:
+            subjects = []
+        return {
+            "enabled": bool(self._config.hide_excluded_enabled),
+            "subjects": subjects,
+        }
+
+    @Slot(bool, list)
+    def setExcludedLessonConfig(self, enabled: bool, subjects: list) -> None:
+        self._config.hide_excluded_enabled = bool(enabled)
+        try:
+            self._config.hide_excluded_subjects = json.dumps(
+                [str(x) for x in (subjects or [])], ensure_ascii=False)
+        except Exception:
+            self._config.hide_excluded_subjects = "[]"
+        self._save_config()
+        self.configChanged.emit()
+
     def _save_config(self) -> None:
         try:
             self.api.config.save()
