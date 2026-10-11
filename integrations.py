@@ -29,7 +29,6 @@ _TIME_REL = Path("src") / "qml" / "widgets" / "Time.qml"
 # 布局在 WidgetsLayout.qml，单个组件的代理项（右键菜单、删除按钮、设置页调用）在 Delegate 里。
 _LAYOUT_REL = Path("src") / "qml" / "ClassWidgets" / "Components" / "WidgetsLayout.qml"
 _DELEGATE_REL = Path("src") / "qml" / "ClassWidgets" / "Components" / "WidgetsLayoutDelegate.qml"
-_BASEWIDGET_REL = Path("src") / "qml" / "ClassWidgets" / "Theme" / "components" / "BaseWidget.qml"
 
 
 _BACKUP_ROOT = ".cwplugin_backups"
@@ -264,50 +263,26 @@ _DO_NOT_HIDE_OLD = "    property bool hide: Configs.data.interactions.hide.state
 
 _DO_NOT_HIDE_NEW = (
     "    // [patched by kryon.do_not_hide] 排除科目上课时不隐藏\n"
-    "    property bool doNotHideActive: false\n"
-    "    property bool hide: Configs.data.interactions.hide.state && !doNotHideActive\n"
-    "\n"
-    "    // scheduleRuntime 的属性不可靠通知，而容器是常驻单例、绑定只求值一次，\n"
-    "    // 直接写成绑定会冻结在初始值上（曾导致「永远不隐藏、点击也无效」）。\n"
-    "    // 故用定时器主动重算，hide 本身仍沿用原判定。\n"
+    "    //\n"
+    "    // hide 保持宿主原语义，不动它：interactions.hide.state 在全库的唯一写入者\n"
+    "    // 是「点击组件」（MainInterface.qml:110-111，由 hide.clicked 门控）。\n"
+    "    // 早先写成 hide = state 与非 doNotHideActive 的合取，会把点击隐藏一并吃掉 ——\n"
+    "    // 排除科目上课时点组件毫无反应。hide.maximized / hide.fullscreen 那两个\n"
+    "    // 开关宿主本来就没有读取方，被压制后更像是\"坏了\"。\n"
+    "    //\n"
+    "    // 改为「自动恢复」：排除科目上课期间若处于隐藏态，把它恢复成显示。\n"
+    "    // 这样点击、最大化、全屏等既有通路全部不受影响。\n"
+    "    // 用 Timer 而非绑定：scheduleRuntime 的属性不可靠通知，容器又是常驻单例。\n"
     "    Timer {\n"
     "        interval: 1000\n"
     "        running: true\n"
     "        repeat: true\n"
-    "        onTriggered: widgetsContainer.doNotHideActive = widgetsContainer._excludedInClass()\n"
-    "    }\n"
-    "\n"
-    "    function _excludedInClass() {\n"
-    "        try {\n"
-    "            if (AppCentral.scheduleRuntime.currentStatus !== \"class\") return false\n"
-    "            var cfg = Configs.data.plugins.configs[\"com.kryon.more_settings\"]\n"
-    "            if (!cfg || cfg.hide_excluded_enabled !== true) return false\n"
-    "            var subs = cfg.hide_excluded_subjects\n"
-    "            subs = (typeof subs === \"string\")\n"
-    "                ? JSON.parse(subs || \"[]\") : (subs || [])\n"
-    "            var cur = (AppCentral.scheduleRuntime.currentSubject || {}).name || \"\"\n"
-    "            return cur !== \"\" && subs.indexOf(cur) >= 0\n"
-    "        } catch (e) { return false }\n"
-    "    }\n"
-)
-
-_DO_NOT_HIDE_BASE_OLD = (
-    "    readonly property bool hide: Configs.data.interactions.hide.state\n"
-)
-
-_DO_NOT_HIDE_BASE_NEW = (
-    "    // [patched by kryon.do_not_hide] 排除科目上课时不隐藏（与容器同一判断）\n"
-    "    readonly property bool hide: Configs.data.interactions.hide.state && !baseDoNotHideActive\n"
-    "    property bool baseDoNotHideActive: false\n"
-    "\n"
-    "    // 与 WidgetsContainer 同因：scheduleRuntime 不可靠通知，且这里是 readonly\n"
-    "    // 绑定，不重算会冻结在初始值。故同样用定时器主动重算。\n"
-    "    // 两处各留一份判断是有意为之：组件不知道该去问容器，跨文件引用会耦合。\n"
-    "    Timer {\n"
-    "        interval: 1000\n"
-    "        running: true\n"
-    "        repeat: true\n"
-    "        onTriggered: widgetBase.baseDoNotHideActive = widgetBase._excludedInClass()\n"
+    "        onTriggered: {\n"
+    "            if (!widgetsContainer._excludedInClass()) return\n"
+    "            if (Configs.data.interactions.hide.state\n"
+    "                    && !Configs.isKeyLocked(\"interactions.hide.state\"))\n"
+    "                Configs.set(\"interactions.hide.state\", false)\n"
+    "        }\n"
     "    }\n"
     "\n"
     "    function _excludedInClass() {\n"
@@ -327,12 +302,6 @@ _DO_NOT_HIDE_BASE_NEW = (
 
 _DO_NOT_HIDE_OPS = [
     (_DO_NOT_HIDE_OLD, _DO_NOT_HIDE_NEW),
-]
-
-# 组件层单独成组：apply_ops 会把整组 ops 逐条打到【同一个】目标文件，
-# 容器锚点与 BaseWidget 锚点混在一组里，互相对不上会双双跳过。
-_DO_NOT_HIDE_BASE_OPS = [
-    (_DO_NOT_HIDE_BASE_OLD, _DO_NOT_HIDE_BASE_NEW),
 ]
 
 
@@ -519,7 +488,6 @@ PUBLIC_GROUPS = {
     "extended_legacy": _EXTENDED_LEGACY_OPS,
     # 功能 kryon.do_not_hide 名下 —— 只有该功能包安装时才应用
     "do_not_hide_ops": _DO_NOT_HIDE_OPS,
-    "do_not_hide_base_ops": _DO_NOT_HIDE_BASE_OPS,
 }
 
 
@@ -609,7 +577,6 @@ def restore_all(logger, root=None):
         return False
 
     for name, rel in (("WidgetsContainer.qml.orig", _CONTAINER_REL),
-                      ("BaseWidget.qml.orig", _BASEWIDGET_REL),
                       ("WidgetLoader.qml.orig", _WLOADER_REL),
                       ("eventCountdown.qml.orig", _COUNTDOWN_REL),
                       ("Time.qml.orig", _TIME_REL)):
