@@ -30,6 +30,7 @@ _HOST_FILES = {
     "container": "_CONTAINER_REL",
     "wloader": "_WLOADER_REL",
     "layout": "_LAYOUT_REL",
+    "basewidget": "_BASEWIDGET_REL",
     "delegate": "_DELEGATE_REL",
     "dialog": "_DIALOG_REL",
     "countdown": "_COUNTDOWN_REL",

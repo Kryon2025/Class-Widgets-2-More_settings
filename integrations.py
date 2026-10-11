@@ -29,6 +29,7 @@ _TIME_REL = Path("src") / "qml" / "widgets" / "Time.qml"
 # 布局在 WidgetsLayout.qml，单个组件的代理项（右键菜单、删除按钮、设置页调用）在 Delegate 里。
 _LAYOUT_REL = Path("src") / "qml" / "ClassWidgets" / "Components" / "WidgetsLayout.qml"
 _DELEGATE_REL = Path("src") / "qml" / "ClassWidgets" / "Components" / "WidgetsLayoutDelegate.qml"
+_BASEWIDGET_REL = Path("src") / "qml" / "ClassWidgets" / "Theme" / "components" / "BaseWidget.qml"
 
 
 _BACKUP_ROOT = ".cwplugin_backups"
@@ -290,8 +291,48 @@ _DO_NOT_HIDE_NEW = (
     "    }\n"
 )
 
+_DO_NOT_HIDE_BASE_OLD = (
+    "    readonly property bool hide: Configs.data.interactions.hide.state\n"
+)
+
+_DO_NOT_HIDE_BASE_NEW = (
+    "    // [patched by kryon.do_not_hide] 排除科目上课时不隐藏（与容器同一判断）\n"
+    "    readonly property bool hide: Configs.data.interactions.hide.state && !baseDoNotHideActive\n"
+    "    property bool baseDoNotHideActive: false\n"
+    "\n"
+    "    // 与 WidgetsContainer 同因：scheduleRuntime 不可靠通知，且这里是 readonly\n"
+    "    // 绑定，不重算会冻结在初始值。故同样用定时器主动重算。\n"
+    "    // 两处各留一份判断是有意为之：组件不知道该去问容器，跨文件引用会耦合。\n"
+    "    Timer {\n"
+    "        interval: 1000\n"
+    "        running: true\n"
+    "        repeat: true\n"
+    "        onTriggered: widgetBase.baseDoNotHideActive = widgetBase._excludedInClass()\n"
+    "    }\n"
+    "\n"
+    "    function _excludedInClass() {\n"
+    "        try {\n"
+    "            if (AppCentral.scheduleRuntime.currentStatus !== \"class\") return false\n"
+    "            var cfg = Configs.data.plugins.configs[\"com.kryon.more_settings\"]\n"
+    "            if (!cfg || cfg.hide_excluded_enabled !== true) return false\n"
+    "            var subs = cfg.hide_excluded_subjects\n"
+    "            subs = (typeof subs === \"string\")\n"
+    "                ? JSON.parse(subs || \"[]\") : (subs || [])\n"
+    "            var cur = (AppCentral.scheduleRuntime.currentSubject || {}).name || \"\"\n"
+    "            return cur !== \"\" && subs.indexOf(cur) >= 0\n"
+    "        } catch (e) { return false }\n"
+    "    }\n"
+)
+
+
 _DO_NOT_HIDE_OPS = [
     (_DO_NOT_HIDE_OLD, _DO_NOT_HIDE_NEW),
+]
+
+# 组件层单独成组：apply_ops 会把整组 ops 逐条打到【同一个】目标文件，
+# 容器锚点与 BaseWidget 锚点混在一组里，互相对不上会双双跳过。
+_DO_NOT_HIDE_BASE_OPS = [
+    (_DO_NOT_HIDE_BASE_OLD, _DO_NOT_HIDE_BASE_NEW),
 ]
 
 
@@ -478,6 +519,7 @@ PUBLIC_GROUPS = {
     "extended_legacy": _EXTENDED_LEGACY_OPS,
     # 功能 kryon.do_not_hide 名下 —— 只有该功能包安装时才应用
     "do_not_hide_ops": _DO_NOT_HIDE_OPS,
+    "do_not_hide_base_ops": _DO_NOT_HIDE_BASE_OPS,
 }
 
 
@@ -567,6 +609,7 @@ def restore_all(logger, root=None):
         return False
 
     for name, rel in (("WidgetsContainer.qml.orig", _CONTAINER_REL),
+                      ("BaseWidget.qml.orig", _BASEWIDGET_REL),
                       ("WidgetLoader.qml.orig", _WLOADER_REL),
                       ("eventCountdown.qml.orig", _COUNTDOWN_REL),
                       ("Time.qml.orig", _TIME_REL)):
