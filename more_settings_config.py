@@ -6,7 +6,6 @@
 字段说明：
 - countdown_animation：内置"事件倒计时"组件数字滚动动画开关
 - time_*：内置"时间"组件的显示选项（动画 / 秒 / 日期 / 星期 / 布局 / 交替）
-- display_height：组件距屏幕顶部距离（顶部停靠时生效；-1 = 跟随主程序默认偏移）
 - hide_depth：隐藏时保留在屏幕边缘的宽度（px）
 
 模块名刻意用 ``more_settings_config`` 而非 ``config``，避免与其它插件的
@@ -36,8 +35,6 @@ class MoreSettingsConfig(ConfigBaseModel):
     time_alternate_interval: int = 3000    # 交替间隔（毫秒）
     time_alternate_animation: bool = False  # 交替切换淡入淡出
 
-    # 小组件高度/深度
-    display_height: float = -1             # 展示高度（px；-1 = 跟随默认偏移）
     hide_depth: float = 24                 # 隐藏深度（px）
 
     # 特定课程不隐藏（仅在主程序"在课堂中隐藏"时生效；按课表所选科目判定）
